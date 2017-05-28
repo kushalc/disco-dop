@@ -633,9 +633,12 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
             lhs = lexrule.lhs
             if tag is None or tagre.match(grammar.tolabel[lhs]):
                 chart.addedge(lhs, left, right, right, NULL)
+
+                # FIXME: Here's the entrypoint.
                 chart.updateprob(lhs, left, right,
                                  0.0 if symbolic else lexrule.prob, 0.0)
                 unaryagenda.setitem(lhs, lexrule.prob)
+
                 recognized = True
                 # update filter
                 if left > minleft[lhs, right]:
