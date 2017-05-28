@@ -319,7 +319,8 @@ cdef class SparseCFGChart(CFGChart):
 
 
 def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
-          bint symbolic=False, double beam_beta=0.0, int beam_delta=50):
+          bint symbolic=False, double beam_beta=0.0, int beam_delta=50,
+          estimator=None):
     """A CKY parser modeled after Bodenstab's 'fast grammar loop'.
 
     :param sent: A sequence of tokens that will be parsed.
@@ -353,7 +354,8 @@ def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
             return parse_symbolic(sent, < DenseCFGChart > chart, grammar,
                                   tags=tags, whitelist=whitelist)
         return parse_main(sent, < DenseCFGChart > chart, grammar, tags,
-                          whitelist, beam_beta, beam_delta)
+                          whitelist, beam_beta, beam_delta,
+                          estimator=estimator)
     chart = SparseCFGChart(grammar, sent, start)
     if symbolic:
         return parse_symbolic(sent, < SparseCFGChart > chart, grammar,
@@ -363,7 +365,8 @@ def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
 
 
 cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
-                list whitelist, double beam_beta, int beam_delta):
+                list whitelist, double beam_beta, int beam_delta,
+                estimator=None):
     cdef:
         short[:, :] minleft, maxleft, minright, maxright
         DoubleAgenda unaryagenda = DoubleAgenda()
@@ -379,7 +382,8 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
         grammar.nonterminals, lensent)
     # assign POS tags
     covered, msg = populatepos(grammar, chart, sent, tags, whitelist, False,
-                               minleft, maxleft, minright, maxright)
+                               minleft, maxleft, minright, maxright,
+                               estimator=estimator)
     if not covered:
         return chart, msg
 
@@ -607,7 +611,8 @@ cdef parse_symbolic(sent, CFGChart_fused chart, Grammar grammar,
 
 cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
                  bint symbolic, short[:, :] minleft, short[:, :] maxleft,
-                 short[:, :] minright, short[:, :] maxright):
+                 short[:, :] minright, short[:, :] maxright,
+                 estimator=None):
     """Apply all possible lexical and unary rules on each lexical span.
 
     :returns: a tuple ``(success, msg)`` where ``success`` is True if a POS tag
@@ -636,7 +641,9 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
                 chart.addedge(lhs, left, right, right, NULL)
 
                 # FIXME: Here's the entrypoint.
-                pr = 0.0 if symbolic else lexrule.prob
+                pr = 0.000
+                if not symbolic:
+                    pr = estimator(lhs, word) if estimator else lexrule.prob
                 chart.updateprob(lhs, left, right, pr, 0.0)
                 unaryagenda.setitem(lhs, pr)
                 logging.info("Estimated EmissionPr: %s [%d] => %0.3f",
