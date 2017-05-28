@@ -634,8 +634,9 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
         # FIXME: Have parser return -Inf or NaN if not emittable. DiscoPCFG
         # uses grammar specificity as an optimization and we're breaking that by
         # using all possible lexrules here.
+        orth = unicode(word)
         for lexrule in grammar.lexical if grammar.emission else \
-                       grammar.lexicalbyword.get(unicode(word), ()):
+                       grammar.lexicalbyword.get(orth, ()):
             # assert whitelist is None or cell in whitelist, whitelist.keys()
             if whitelist is not None and lexrule.lhs not in whitelist[
                     compactcellidx(left, right, lensent, 1)]:
@@ -654,7 +655,7 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
                 chart.updateprob(lhs, left, right, pr, 0.0)
                 unaryagenda.setitem(lhs, pr)
                 logging.info("Added to UnaryAgenda: %s [%s] => %0.3f",
-                             word, grammar.tolabel[lhs], pr)
+                             orth.strip(), grammar.tolabel[lhs], pr)
 
                 recognized = True
                 # update filter
