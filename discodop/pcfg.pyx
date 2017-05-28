@@ -1,6 +1,7 @@
 """CKY parser for Probabilistic Context-Free Grammar (PCFG)."""
 from __future__ import print_function
 from os import unlink
+import logging
 import re
 import sys
 import subprocess
@@ -625,7 +626,7 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
         tagre = re.compile('%s($|@|\\^|/)' % re.escape(tag)) if tags else None
         right = left + 1
         recognized = False
-        for lexrule in grammar.lexicalbyword.get(word, ()):
+        for lexrule in grammar.lexicalbyword.get(unicode(word), ()):
             # assert whitelist is None or cell in whitelist, whitelist.keys()
             if whitelist is not None and lexrule.lhs not in whitelist[
                     compactcellidx(left, right, lensent, 1)]:
@@ -635,9 +636,11 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
                 chart.addedge(lhs, left, right, right, NULL)
 
                 # FIXME: Here's the entrypoint.
-                chart.updateprob(lhs, left, right,
-                                 0.0 if symbolic else lexrule.prob, 0.0)
-                unaryagenda.setitem(lhs, lexrule.prob)
+                pr = 0.0 if symbolic else lexrule.prob
+                chart.updateprob(lhs, left, right, pr, 0.0)
+                unaryagenda.setitem(lhs, pr)
+                logging.info("Estimated EmissionPr: %s [%d] => %0.3f",
+                             word, lhs, pr)
 
                 recognized = True
                 # update filter
