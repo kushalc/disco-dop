@@ -321,7 +321,7 @@ cdef class SparseCFGChart(CFGChart):
 
 def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
           bint symbolic=False, double beam_beta=0.0, int beam_delta=50,
-          estimator=None):
+          parser=None):
     """A CKY parser modeled after Bodenstab's 'fast grammar loop'.
 
     :param sent: A sequence of tokens that will be parsed.
@@ -356,7 +356,7 @@ def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
                                   tags=tags, whitelist=whitelist)
         return parse_main(sent, < DenseCFGChart > chart, grammar, tags,
                           whitelist, beam_beta, beam_delta,
-                          estimator=estimator)
+                          parser=parser)
     chart = SparseCFGChart(grammar, sent, start)
     if symbolic:
         return parse_symbolic(sent, < SparseCFGChart > chart, grammar,
@@ -367,7 +367,7 @@ def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
 
 cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                 list whitelist, double beam_beta, int beam_delta,
-                estimator=None):
+                parser=None):
     cdef:
         short[:, :] minleft, maxleft, minright, maxright
         DoubleAgenda unaryagenda = DoubleAgenda()
@@ -384,7 +384,7 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
     # assign POS tags
     covered, msg = populatepos(grammar, chart, sent, tags, whitelist, False,
                                minleft, maxleft, minright, maxright,
-                               estimator=estimator)
+                               parser=parser)
     if not covered:
         return chart, msg
 
@@ -613,7 +613,7 @@ cdef parse_symbolic(sent, CFGChart_fused chart, Grammar grammar,
 cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
                  bint symbolic, short[:, :] minleft, short[:, :] maxleft,
                  short[:, :] minright, short[:, :] maxright,
-                 estimator=None):
+                 parser=None):
     """Apply all possible lexical and unary rules on each lexical span.
 
     :returns: a tuple ``(success, msg)`` where ``success`` is True if a POS tag
@@ -624,6 +624,8 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
         LexicalRule lexrule
         uint32_t n, lhs, rhs1
         short left, right, lensent = len(sent)
+
+    parser._prepare_emission(grammar.tolabel, sent)
     for left, word in enumerate(sent):
         tag = tags[left] if tags else None
         # if we are given gold tags, make sure we only allow matching
@@ -633,10 +635,10 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
         right = left + 1
         recognized = False
 
-        # FIXME: Have estimator return -Inf or NaN if not emittable. DiscoPCFG
+        # FIXME: Have parser return -Inf or NaN if not emittable. DiscoPCFG
         # uses grammar specificity as an optimization and we're breaking that by
         # using all possible lexrules here.
-        for lexrule in grammar.lexical if estimator else \
+        for lexrule in grammar.lexical if parser else \
                        grammar.lexicalbyword.get(unicode(word), ()):
             # assert whitelist is None or cell in whitelist, whitelist.keys()
             if whitelist is not None and lexrule.lhs not in whitelist[
@@ -644,20 +646,19 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
                 continue
 
             lhs = lexrule.lhs
-
-            # FIXME: Can we use grammar.tolabel to drive estimator?
             if tag is None or tagre.match(grammar.tolabel[lhs]):
                 pr = 0.000
                 if not symbolic:
-                    pr = estimator(lhs, word) if estimator else lexrule.prob
+                    pr = parser._emission_log_proba(lhs, word) \
+                         if parser else lexrule.prob
                 if math.isinf(pr) or math.isnan(pr):
                   continue
 
                 chart.addedge(lhs, left, right, right, NULL)
                 chart.updateprob(lhs, left, right, pr, 0.0)
                 unaryagenda.setitem(lhs, pr)
-                logging.info("Estimated EmissionPr: %s [%d] => %0.3f",
-                             word, lhs, pr)
+                logging.info("Added to UnaryAgenda: %s [%s] => %0.3f",
+                             word, grammar.tolabel[lhs], pr)
 
                 recognized = True
                 # update filter
