@@ -2,6 +2,7 @@
 from __future__ import print_function
 from os import unlink
 import logging
+import math
 import re
 import sys
 import subprocess
@@ -631,19 +632,28 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
         tagre = re.compile('%s($|@|\\^|/)' % re.escape(tag)) if tags else None
         right = left + 1
         recognized = False
-        for lexrule in grammar.lexicalbyword.get(unicode(word), ()):
+
+        # FIXME: Have estimator return -Inf or NaN if not emittable. DiscoPCFG
+        # uses grammar specificity as an optimization and we're breaking that by
+        # using all possible lexrules here.
+        for lexrule in grammar.lexical if estimator else \
+                       grammar.lexicalbyword.get(unicode(word), ()):
             # assert whitelist is None or cell in whitelist, whitelist.keys()
             if whitelist is not None and lexrule.lhs not in whitelist[
                     compactcellidx(left, right, lensent, 1)]:
                 continue
-            lhs = lexrule.lhs
-            if tag is None or tagre.match(grammar.tolabel[lhs]):
-                chart.addedge(lhs, left, right, right, NULL)
 
-                # FIXME: Here's the entrypoint.
+            lhs = lexrule.lhs
+
+            # FIXME: Can we use grammar.tolabel to drive estimator?
+            if tag is None or tagre.match(grammar.tolabel[lhs]):
                 pr = 0.000
                 if not symbolic:
                     pr = estimator(lhs, word) if estimator else lexrule.prob
+                if math.isinf(pr) or math.isnan(pr):
+                  continue
+
+                chart.addedge(lhs, left, right, right, NULL)
                 chart.updateprob(lhs, left, right, pr, 0.0)
                 unaryagenda.setitem(lhs, pr)
                 logging.info("Estimated EmissionPr: %s [%d] => %0.3f",
