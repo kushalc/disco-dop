@@ -320,8 +320,7 @@ cdef class SparseCFGChart(CFGChart):
 
 
 def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
-          bint symbolic=False, double beam_beta=0.0, int beam_delta=50,
-          parser=None):
+          bint symbolic=False, double beam_beta=0.0, int beam_delta=50):
     """A CKY parser modeled after Bodenstab's 'fast grammar loop'.
 
     :param sent: A sequence of tokens that will be parsed.
@@ -355,8 +354,7 @@ def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
             return parse_symbolic(sent, < DenseCFGChart > chart, grammar,
                                   tags=tags, whitelist=whitelist)
         return parse_main(sent, < DenseCFGChart > chart, grammar, tags,
-                          whitelist, beam_beta, beam_delta,
-                          parser=parser)
+                          whitelist, beam_beta, beam_delta)
     chart = SparseCFGChart(grammar, sent, start)
     if symbolic:
         return parse_symbolic(sent, < SparseCFGChart > chart, grammar,
@@ -366,8 +364,7 @@ def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
 
 
 cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
-                list whitelist, double beam_beta, int beam_delta,
-                parser=None):
+                list whitelist, double beam_beta, int beam_delta):
     cdef:
         short[:, :] minleft, maxleft, minright, maxright
         DoubleAgenda unaryagenda = DoubleAgenda()
@@ -383,8 +380,7 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
         grammar.nonterminals, lensent)
     # assign POS tags
     covered, msg = populatepos(grammar, chart, sent, tags, whitelist, False,
-                               minleft, maxleft, minright, maxright,
-                               parser=parser)
+                               minleft, maxleft, minright, maxright)
     if not covered:
         return chart, msg
 
@@ -612,8 +608,7 @@ cdef parse_symbolic(sent, CFGChart_fused chart, Grammar grammar,
 
 cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
                  bint symbolic, short[:, :] minleft, short[:, :] maxleft,
-                 short[:, :] minright, short[:, :] maxright,
-                 parser=None):
+                 short[:, :] minright, short[:, :] maxright):
     """Apply all possible lexical and unary rules on each lexical span.
 
     :returns: a tuple ``(success, msg)`` where ``success`` is True if a POS tag
@@ -625,7 +620,8 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
         uint32_t n, lhs, rhs1
         short left, right, lensent = len(sent)
 
-    parser._prepare_emission(grammar.tolabel, sent)
+    prepared = grammar.emission._prepare_sentence(sent) \
+               if grammar.emission else None
     for left, word in enumerate(sent):
         tag = tags[left] if tags else None
         # if we are given gold tags, make sure we only allow matching
@@ -638,7 +634,7 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
         # FIXME: Have parser return -Inf or NaN if not emittable. DiscoPCFG
         # uses grammar specificity as an optimization and we're breaking that by
         # using all possible lexrules here.
-        for lexrule in grammar.lexical if parser else \
+        for lexrule in grammar.lexical if grammar.emission else \
                        grammar.lexicalbyword.get(unicode(word), ()):
             # assert whitelist is None or cell in whitelist, whitelist.keys()
             if whitelist is not None and lexrule.lhs not in whitelist[
@@ -649,8 +645,8 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
             if tag is None or tagre.match(grammar.tolabel[lhs]):
                 pr = 0.000
                 if not symbolic:
-                    pr = parser._emission_log_proba(lhs, word) \
-                         if parser else lexrule.prob
+                    pr = grammar.emission._emission_log_proba(prepared, lhs, word) \
+                         if grammar.emission else lexrule.prob
                 if math.isinf(pr) or math.isnan(pr):
                   continue
 

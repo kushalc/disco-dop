@@ -49,6 +49,7 @@ cdef class Grammar:
     cdef _indexrules(self, ProbRule ** dest, int idx, int filterlen)
     cpdef rulestr(self, int n)
     cdef yfstr(self, ProbRule rule)
+    cdef object emission
 
 
 # chart improvements done:

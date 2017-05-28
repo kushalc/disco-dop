@@ -61,13 +61,14 @@ cdef class Grammar:
         self.fanout = self.unary = self.mapping = self.splitmapping = NULL
 
     def __init__(self, rule_tuples_or_str, lexicon=None, start='ROOT',
-                 binarized=True):
+                 binarized=True, emission=None):
         cdef LexicalRule lexrule
         cdef double[:] weights
         cdef int n
         self.mapping = self.splitmapping = self.bylhs = NULL
         self.start = start
         self.binarized = binarized
+        self.emission = emission
         self.numunary = self.numbinary = self.currentmodel = 0
         self.modelnames = ['default']
         self.logprob = False
@@ -124,6 +125,9 @@ cdef class Grammar:
         for n, lexrule in enumerate(self.lexical, self.numrules):
             weights[n] = lexrule.prob
         self.switch(u'default', True)  # enable log probabilities
+
+        if self.emission:
+          self.emission._prepare_grammar(self)
 
     @cython.wraparound(True)
     def _countrules(self, list rulelines):
