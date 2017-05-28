@@ -1,6 +1,6 @@
 .PHONY: clean install test testdebug lint docs discodop py2
 
-all: discodop
+all: py2
 
 clean:
 	rm -rf build/
@@ -16,7 +16,8 @@ discodop:
 	cp build/lib.*/discodop/*.so discodop/
 
 py2:
-	python2 setup.py install --user
+	python2 setup.py build
+	sudo python2 setup.py install
 	cp build/lib.*/discodop/*.so discodop/
 
 docs:
