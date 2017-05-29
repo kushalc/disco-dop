@@ -126,9 +126,6 @@ cdef class Grammar:
             weights[n] = lexrule.prob
         self.switch(u'default', True)  # enable log probabilities
 
-        if self.emission:
-          self.emission._prepare_grammar(self)
-
     @cython.wraparound(True)
     def _countrules(self, list rulelines):
         """Count unary & binary rules; make a canonical list of all
