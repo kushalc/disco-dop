@@ -655,8 +655,8 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
                 chart.addedge(lhs, left, right, right, NULL)
                 chart.updateprob(lhs, left, right, pr, 0.0)
                 unaryagenda.setitem(lhs, pr)
-                logging.info("Added to UnaryAgenda: %s [%s] => %0.3f",
-                             orth.strip(), grammar.tolabel[lhs], pr)
+                # logging.debug("Added to UnaryAgenda: %s [%s] => %0.3f",
+                #               orth.strip(), grammar.tolabel[lhs], pr)
 
                 recognized = True
                 # update filter
