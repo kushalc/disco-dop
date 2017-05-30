@@ -348,7 +348,8 @@ def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
         raise ValueError('Not a PCFG! fanout: %d' % grammar.maxfanout)
     if not grammar.logprob:
         raise ValueError('Expected grammar with log probabilities.')
-    if grammar.nonterminals < 20000:
+    if grammar.nonterminals < MAX_DENSE_NTS and \
+       len(sent) < MAX_DENSE_LEN:
         chart = DenseCFGChart(grammar, sent, start)
         if symbolic:
             return parse_symbolic(sent, < DenseCFGChart > chart, grammar,
@@ -649,7 +650,7 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
                     pr = grammar.emission._emission_log_proba(prepared, lhs, word) \
                          if grammar.emission else lexrule.prob
                 if math.isinf(pr) or math.isnan(pr):
-                  continue
+                    continue
 
                 chart.addedge(lhs, left, right, right, NULL)
                 chart.updateprob(lhs, left, right, pr, 0.0)

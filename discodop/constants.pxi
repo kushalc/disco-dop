@@ -26,3 +26,7 @@ DEF MAX_LOGPROB = 300.0
 # The maximum length of the path to the root node and any terminal node.
 # Prevents unary cycles from causing stack overflows in k-best extraction.
 DEF MAX_DEPTH = 4096
+
+# The maximum number of NTs before we switch to a SparseCFGChart.
+DEF MAX_DENSE_NTS = 20000
+DEF MAX_DENSE_LEN = 512
