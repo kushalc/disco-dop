@@ -7,8 +7,7 @@ from cpython.array cimport array
 cimport cython
 include "constants.pxi"
 
-# NB: For PCFG parsing sentences longer than 256 words, change this to uint16_t
-ctypedef uint8_t Idx
+ctypedef unsigned short Idx
 
 
 cdef extern from *:
