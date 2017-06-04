@@ -380,8 +380,10 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
     minleft, maxleft, minright, maxright = minmaxmatrices(
         grammar.nonterminals, lensent)
     # assign POS tags
+    prepared = grammar.emission._prepare_sentence(sent) \
+               if grammar.emission else None
     covered, msg = populatepos(grammar, chart, sent, tags, whitelist, False,
-                               minleft, maxleft, minright, maxright)
+                               minleft, maxleft, minright, maxright, prepared)
     if not covered:
         return chart, msg
 
@@ -471,7 +473,8 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                     lhs = rule.lhs
 
                     if grammar.emission and grammar.emission._is_mte(rhs1, span):
-                        prob = rule.prob + grammar.emission._span_log_proba(rhs1, sent[left:right])
+                        prob = rule.prob + grammar.emission._span_log_proba(rhs1, sent[left:right],
+                                                                            prepared=prepared)
                     else:
                         prob = rule.prob + chart._subtreeprob(cell + rhs1)
                     if math.isinf(prob) or math.isnan(prob):
@@ -514,7 +517,7 @@ cdef parse_symbolic(sent, CFGChart_fused chart, Grammar grammar,
         grammar.nonterminals, lensent)
     # assign POS tags
     covered, msg = populatepos(grammar, chart, sent, tags, whitelist, True,
-                               minleft, maxleft, minright, maxright)
+                               minleft, maxleft, minright, maxright, None)
     if not covered:
         return chart, msg
 
@@ -616,7 +619,8 @@ cdef parse_symbolic(sent, CFGChart_fused chart, Grammar grammar,
 
 cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
                  bint symbolic, short[:, :] minleft, short[:, :] maxleft,
-                 short[:, :] minright, short[:, :] maxright):
+                 short[:, :] minright, short[:, :] maxright,
+                 prepared=None):
     """Apply all possible lexical and unary rules on each lexical span.
 
     :returns: a tuple ``(success, msg)`` where ``success`` is True if a POS tag
@@ -628,8 +632,6 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
         uint32_t n, lhs, rhs1
         short left, right, lensent = len(sent)
 
-    prepared = grammar.emission._prepare_sentence(sent) \
-               if grammar.emission else None
     for left, word in enumerate(sent):
         tag = tags[left] if tags else None
         # if we are given gold tags, make sure we only allow matching
