@@ -469,7 +469,14 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                             and rule.lhs not in cellwhitelist):
                         continue
                     lhs = rule.lhs
-                    prob = rule.prob + chart._subtreeprob(cell + rhs1)
+
+                    if grammar.emission and grammar.emission._is_mte(rhs1, span):
+                        prob = rule.prob + grammar.emission._span_log_proba(rhs1, sent[left:right])
+                    else:
+                        prob = rule.prob + chart._subtreeprob(cell + rhs1)
+                    if math.isinf(prob) or math.isnan(prob):
+                        continue
+
                     chart.addedge(lhs, left, right, right, rule)
                     if (not chart.hasitem(cell + lhs)
                             or prob < chart._subtreeprob(cell + lhs)):
@@ -647,7 +654,7 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
             if tag is None or tagre.match(grammar.tolabel[lhs]):
                 pr = 0.000
                 if not symbolic:
-                    pr = grammar.emission._emission_log_proba(prepared, lhs, word) \
+                    pr = grammar.emission._token_log_proba(lhs, word, prepared=prepared) \
                          if grammar.emission else lexrule.prob
                 if math.isinf(pr) or math.isnan(pr):
                     continue
