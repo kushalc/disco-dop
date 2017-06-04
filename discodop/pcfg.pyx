@@ -472,9 +472,9 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                         continue
                     lhs = rule.lhs
 
-                    if grammar.emission and grammar.emission._is_mte(rhs1, span):
-                        prob = rule.prob + grammar.emission._span_log_proba(rhs1, sent[left:right],
-                                                                            prepared=prepared)
+                    if grammar.emission and grammar.emission._is_mte(lhs, span):
+                        prob = grammar.emission._span_log_proba(lhs, sent[left:right],
+                                                                prepared=prepared)
                     else:
                         prob = rule.prob + chart._subtreeprob(cell + rhs1)
                     if math.isinf(prob) or math.isnan(prob):
