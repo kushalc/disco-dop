@@ -628,7 +628,7 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
         # if we are given gold tags, make sure we only allow matching
         # tags - after removing addresses introduced by the DOP reduction
         # and other state splits.
-        tagre = re.compile('%s($|@|\\^|/)' % re.escape(tag)) if tags else None
+        tagre = re.compile('%s($|@|\\^|/)' % re.escape(tag)) if tag else None
         right = left + 1
         recognized = False
 
