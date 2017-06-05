@@ -413,35 +413,46 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                         lhs = next(it)
                     except StopIteration:
                         break
+
+                # FIXME: MTEs can only have one rule!
                 n = 0
                 rule = &(grammar.bylhs[lhs][n])
                 oldscore = chart._subtreeprob(cell + lhs)
-                while rule.lhs == lhs:
-                    narrowr = minright[rule.rhs1, left]
-                    narrowl = minleft[rule.rhs2, right]
-                    if (rule.rhs2 == 0 or narrowr >= right or narrowl < narrowr
-                            or TESTBIT(grammar.mask, rule.no)):
+
+                if grammar.emission and grammar.emission._is_mte(lhs, span):
+                    prob = grammar.emission._span_log_proba(lhs, sent[left:right],
+                                                            prepared=prepared)
+                    if chart.updateprob(lhs, left, right, prob,
+                                        beam_beta if span <= beam_delta else 0.0):
+                        chart.addedge(lhs, left, right, right, rule)
+
+                else:
+                    while rule.lhs == lhs:
+                        narrowr = minright[rule.rhs1, left]
+                        narrowl = minleft[rule.rhs2, right]
+                        if (rule.rhs2 == 0 or narrowr >= right or narrowl < narrowr
+                                or TESTBIT(grammar.mask, rule.no)):
+                            n += 1
+                            rule = &(grammar.bylhs[lhs][n])
+                            continue
+                        widel = maxleft[rule.rhs2, right]
+                        minmid = narrowr if narrowr > widel else widel
+                        wider = maxright[rule.rhs1, left]
+                        maxmid = wider if wider < narrowl else narrowl
+                        for mid in range(minmid, maxmid + 1):
+                            leftitem = cellidx(left, mid,
+                                               lensent, grammar.nonterminals) + rule.rhs1
+                            rightitem = cellidx(mid, right,
+                                                lensent, grammar.nonterminals) + rule.rhs2
+                            if (chart.hasitem(leftitem)
+                                    and chart.hasitem(rightitem)):
+                                prob = (rule.prob + chart._subtreeprob(leftitem)
+                                        + chart._subtreeprob(rightitem))
+                                if chart.updateprob(lhs, left, right, prob,
+                                                    beam_beta if span <= beam_delta else 0.0):
+                                    chart.addedge(lhs, left, right, mid, rule)
                         n += 1
                         rule = &(grammar.bylhs[lhs][n])
-                        continue
-                    widel = maxleft[rule.rhs2, right]
-                    minmid = narrowr if narrowr > widel else widel
-                    wider = maxright[rule.rhs1, left]
-                    maxmid = wider if wider < narrowl else narrowl
-                    for mid in range(minmid, maxmid + 1):
-                        leftitem = cellidx(left, mid,
-                                           lensent, grammar.nonterminals) + rule.rhs1
-                        rightitem = cellidx(mid, right,
-                                            lensent, grammar.nonterminals) + rule.rhs2
-                        if (chart.hasitem(leftitem)
-                                and chart.hasitem(rightitem)):
-                            prob = (rule.prob + chart._subtreeprob(leftitem)
-                                    + chart._subtreeprob(rightitem))
-                            if chart.updateprob(lhs, left, right, prob,
-                                                beam_beta if span <= beam_delta else 0.0):
-                                chart.addedge(lhs, left, right, mid, rule)
-                    n += 1
-                    rule = &(grammar.bylhs[lhs][n])
 
                 # update filter
                 if isinf(oldscore):
@@ -471,15 +482,7 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                             and rule.lhs not in cellwhitelist):
                         continue
                     lhs = rule.lhs
-
-                    if grammar.emission and grammar.emission._is_mte(lhs, span):
-                        prob = grammar.emission._span_log_proba(lhs, sent[left:right],
-                                                                prepared=prepared)
-                    else:
-                        prob = rule.prob + chart._subtreeprob(cell + rhs1)
-                    if math.isinf(prob) or math.isnan(prob):
-                        continue
-
+                    prob = rule.prob + chart._subtreeprob(cell + rhs1)
                     chart.addedge(lhs, left, right, right, rule)
                     if (not chart.hasitem(cell + lhs)
                             or prob < chart._subtreeprob(cell + lhs)):
