@@ -387,7 +387,7 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
     if not covered:
         return chart, msg
 
-    for span in range(2, lensent + 1):
+    for span in range(1, lensent + 1):
         # constituents from left to right
         for left in range(lensent - span + 1):
             right = left + span
@@ -426,7 +426,7 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                                         beam_beta if span <= beam_delta else 0.0):
                         chart.addedge(lhs, left, right, right, rule)
 
-                else:
+                elif span > 1:
                     while rule.lhs == lhs:
                         narrowr = minright[rule.rhs1, left]
                         narrowl = minleft[rule.rhs2, right]
