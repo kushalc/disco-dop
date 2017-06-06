@@ -423,9 +423,10 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                 if grammar.emission and grammar.emission._is_mte(lhs, span):
                     prob = grammar.emission._span_log_proba(lhs, sent[left:right],
                                                             prepared=prepared_span)
-                    if chart.updateprob(lhs, left, right, prob,
-                                        beam_beta if span <= beam_delta else 0.0):
-                        chart.addedge(lhs, left, right, right, rule)
+                    if not math.isinf(prob) and not math.isnan(prob):
+                        if chart.updateprob(lhs, left, right, prob,
+                                            beam_beta if span <= beam_delta else 0.0):
+                            chart.addedge(lhs, left, right, right, NULL)
 
                 elif span > 1:
                     while rule.lhs == lhs:
