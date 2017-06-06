@@ -146,6 +146,7 @@ cdef class DenseCFGChart(CFGChart):
                 edges.len = 0
         edge = &(edgelist.data[edges.len])
         edge.rule = rule
+        edge.left = start
         edge.pos.mid = mid
         edges.len += 1
 
@@ -279,6 +280,7 @@ cdef class SparseCFGChart(CFGChart):
             self.itemsinorder.append(item)
         edge = &(edgelist.data[edges.len])
         edge.rule = rule
+        edge.left = start
         edge.pos.mid = mid
         edges.len += 1
 
