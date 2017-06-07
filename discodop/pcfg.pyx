@@ -146,6 +146,7 @@ cdef class DenseCFGChart(CFGChart):
                 edges.len = 0
         edge = &(edgelist.data[edges.len])
         edge.rule = rule
+        edge.left = start
         edge.pos.mid = mid
         edges.len += 1
 
@@ -279,6 +280,7 @@ cdef class SparseCFGChart(CFGChart):
             self.itemsinorder.append(item)
         edge = &(edgelist.data[edges.len])
         edge.rule = rule
+        edge.left = start
         edge.pos.mid = mid
         edges.len += 1
 
@@ -380,16 +382,19 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
     minleft, maxleft, minright, maxright = minmaxmatrices(
         grammar.nonterminals, lensent)
     # assign POS tags
+    prepared_unary = grammar.emission._prepare_sentence(sent) \
+                     if grammar.emission else None
     covered, msg = populatepos(grammar, chart, sent, tags, whitelist, False,
-                               minleft, maxleft, minright, maxright)
+                               minleft, maxleft, minright, maxright, prepared_unary)
     if not covered:
         return chart, msg
 
-    for span in range(2, lensent + 1):
+    for span in range(1, lensent + 1):
         # constituents from left to right
         for left in range(lensent - span + 1):
             right = left + span
             cell = cellidx(left, right, lensent, grammar.nonterminals)
+            prepared_span = grammar.emission._prepare_span(prepared_unary, sent[left:right])
             lastidx = len(chart.itemsinorder)
             if whitelist is not None:
                 cellwhitelist = <set > whitelist[
@@ -411,35 +416,47 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                         lhs = next(it)
                     except StopIteration:
                         break
+
+                # FIXME: MTEs can only have one rule!
                 n = 0
                 rule = &(grammar.bylhs[lhs][n])
                 oldscore = chart._subtreeprob(cell + lhs)
-                while rule.lhs == lhs:
-                    narrowr = minright[rule.rhs1, left]
-                    narrowl = minleft[rule.rhs2, right]
-                    if (rule.rhs2 == 0 or narrowr >= right or narrowl < narrowr
-                            or TESTBIT(grammar.mask, rule.no)):
+
+                if grammar.emission and grammar.emission._is_mte(lhs, span):
+                    prob = grammar.emission._span_log_proba(lhs, sent[left:right],
+                                                            prepared=prepared_span)
+                    if not math.isinf(prob) and not math.isnan(prob):
+                        if chart.updateprob(lhs, left, right, prob,
+                                            beam_beta if span <= beam_delta else 0.0):
+                            chart.addedge(lhs, left, right, right, NULL)
+
+                elif span > 1:
+                    while rule.lhs == lhs:
+                        narrowr = minright[rule.rhs1, left]
+                        narrowl = minleft[rule.rhs2, right]
+                        if (rule.rhs2 == 0 or narrowr >= right or narrowl < narrowr
+                                or TESTBIT(grammar.mask, rule.no)):
+                            n += 1
+                            rule = &(grammar.bylhs[lhs][n])
+                            continue
+                        widel = maxleft[rule.rhs2, right]
+                        minmid = narrowr if narrowr > widel else widel
+                        wider = maxright[rule.rhs1, left]
+                        maxmid = wider if wider < narrowl else narrowl
+                        for mid in range(minmid, maxmid + 1):
+                            leftitem = cellidx(left, mid,
+                                               lensent, grammar.nonterminals) + rule.rhs1
+                            rightitem = cellidx(mid, right,
+                                                lensent, grammar.nonterminals) + rule.rhs2
+                            if (chart.hasitem(leftitem)
+                                    and chart.hasitem(rightitem)):
+                                prob = (rule.prob + chart._subtreeprob(leftitem)
+                                        + chart._subtreeprob(rightitem))
+                                if chart.updateprob(lhs, left, right, prob,
+                                                    beam_beta if span <= beam_delta else 0.0):
+                                    chart.addedge(lhs, left, right, mid, rule)
                         n += 1
                         rule = &(grammar.bylhs[lhs][n])
-                        continue
-                    widel = maxleft[rule.rhs2, right]
-                    minmid = narrowr if narrowr > widel else widel
-                    wider = maxright[rule.rhs1, left]
-                    maxmid = wider if wider < narrowl else narrowl
-                    for mid in range(minmid, maxmid + 1):
-                        leftitem = cellidx(left, mid,
-                                           lensent, grammar.nonterminals) + rule.rhs1
-                        rightitem = cellidx(mid, right,
-                                            lensent, grammar.nonterminals) + rule.rhs2
-                        if (chart.hasitem(leftitem)
-                                and chart.hasitem(rightitem)):
-                            prob = (rule.prob + chart._subtreeprob(leftitem)
-                                    + chart._subtreeprob(rightitem))
-                            if chart.updateprob(lhs, left, right, prob,
-                                                beam_beta if span <= beam_delta else 0.0):
-                                chart.addedge(lhs, left, right, mid, rule)
-                    n += 1
-                    rule = &(grammar.bylhs[lhs][n])
 
                 # update filter
                 if isinf(oldscore):
@@ -507,7 +524,7 @@ cdef parse_symbolic(sent, CFGChart_fused chart, Grammar grammar,
         grammar.nonterminals, lensent)
     # assign POS tags
     covered, msg = populatepos(grammar, chart, sent, tags, whitelist, True,
-                               minleft, maxleft, minright, maxright)
+                               minleft, maxleft, minright, maxright, None)
     if not covered:
         return chart, msg
 
@@ -609,7 +626,8 @@ cdef parse_symbolic(sent, CFGChart_fused chart, Grammar grammar,
 
 cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
                  bint symbolic, short[:, :] minleft, short[:, :] maxleft,
-                 short[:, :] minright, short[:, :] maxright):
+                 short[:, :] minright, short[:, :] maxright,
+                 prepared=None):
     """Apply all possible lexical and unary rules on each lexical span.
 
     :returns: a tuple ``(success, msg)`` where ``success`` is True if a POS tag
@@ -621,8 +639,6 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
         uint32_t n, lhs, rhs1
         short left, right, lensent = len(sent)
 
-    prepared = grammar.emission._prepare_sentence(sent) \
-               if grammar.emission else None
     for left, word in enumerate(sent):
         tag = tags[left] if tags else None
         # if we are given gold tags, make sure we only allow matching
@@ -647,7 +663,7 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
             if tag is None or tagre.match(grammar.tolabel[lhs]):
                 pr = 0.000
                 if not symbolic:
-                    pr = grammar.emission._emission_log_proba(prepared, lhs, word) \
+                    pr = grammar.emission._token_log_proba(lhs, word, prepared=prepared) \
                          if grammar.emission else lexrule.prob
                 if math.isinf(pr) or math.isnan(pr):
                     continue

@@ -149,6 +149,7 @@ cdef union Position:  # 8 bytes
 cdef struct Edge:  # 16 bytes
     ProbRule * rule  # ruleno may take less space than pointer, but not convenient
     Position pos
+    short left   # FIXME: Unions, WTF?!
 
 
 @cython.final
