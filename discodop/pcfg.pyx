@@ -369,49 +369,50 @@ def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
 cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                 list whitelist, double beam_beta, int beam_delta):
     cdef:
-        DoubleAgenda unaryagenda = DoubleAgenda()
         ProbRule * rule
-        short left, right, mid, span, lensent = len(sent)
-        short last_span, last_left
-        size_t cell, lastidx
-        uint32_t rhs1
+        short last_left, left, mid, right
+        short last_span, span, lensent = len(sent)
         uint32_t ix
 
     last_span = -1
     last_left = -1
+    prepared_doc = grammar.emission._prepare_sentence(sent) \
+                   if grammar.emission else None
     prepared_span = None
 
-    # FIXME: Generalize out to above.
+    # FIXME: Standardize out to below core loop.
     cdef:
         short[:, :] minleft, maxleft, minright, maxright
     minleft, maxleft, minright, maxright = minmaxmatrices(grammar.nonterminals,
                                                           lensent)
     covered, msg = populatepos(grammar, chart, sent, tags, whitelist, True,
-                               minleft, maxleft, minright, maxright, None)
+                               minleft, maxleft, minright, maxright,
+                               prepared=prepared_doc)
     if not covered:
         return chart, msg
 
+    # NOTE: span must be left-most item in naive heap, as we parse bottom-up and
+    # all spans of length N must be solved before we solve any span of length
+    # N+1. In addition, though not required for correctness, left should be next
+    # item for cache locality to avoid recomputing _prepare_span unnecessarily.
     iterable = [(span, left, mid, ix)
                 for span in xrange(1, lensent + 1)
                 for left in xrange(lensent - span + 1)
                 for mid in xrange(left + 1, left + span + 1)
                 for ix in xrange(grammar.numrules)]
     cykagenda = Agenda((it, it) for it in iterable)
-    prepared_unary = grammar.emission._prepare_sentence(sent) \
-                     if grammar.emission else None
     while len(cykagenda.heap):
         (span, left, mid, ix) = cykagenda.popitem()[0]
         rule = &(grammar.bylhs[0][ix])
         right = left + span
 
-        logging.info("Trying %4d %4d %4d: %s => %s %s [%d]", left, mid, right,
-                      grammar.tolabel[rule.lhs], grammar.tolabel[rule.rhs1],
-                      grammar.tolabel[rule.rhs2], ix)
+        # logging.info("Trying %4d %4d %4d: %s => %s %s [%d]", left, mid, right,
+        #               grammar.tolabel[rule.lhs], grammar.tolabel[rule.rhs1],
+        #               grammar.tolabel[rule.rhs2], ix)
         if last_span != span or last_left != left:
-            prepared_span = grammar.emission._prepare_span(prepared_unary, sent[left:right]) \
+            prepared_span = grammar.emission._prepare_span(prepared_doc, sent[left:right]) \
                             if grammar.emission else None
 
-        # FIXME: MTEs can only have one rule!
         beam = beam_beta if span <= beam_delta else 0.0
         if grammar.emission and grammar.emission._is_mte(rule.lhs, span):
             prob = grammar.emission._span_log_proba(rule.lhs, sent[left:right],
