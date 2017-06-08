@@ -321,8 +321,8 @@ cdef class SparseCFGChart(CFGChart):
         self.probs[item] = prob
 
 
-def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
-          bint symbolic=False, double beam_beta=0.0, int beam_delta=50):
+def parse(sent, Grammar grammar, tags=None, start=None,
+          double beam_beta=0.0, int beam_delta=50):
     """A CKY parser modeled after Bodenstab's 'fast grammar loop'.
 
     :param sent: A sequence of tokens that will be parsed.
@@ -333,14 +333,6 @@ def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
     :param start: integer corresponding to the start symbol that complete
             derivations should be headed by; e.g., ``grammar.toid['ROOT']``.
             If not given, the default specified by ``grammar`` is used.
-    :param whitelist: a list of items that may enter the chart.
-            The whitelist is a list of cells consisting of sets of labels:
-            ``whitelist = [{label1, label2, ...}, ...]``;
-            The cells are indexed as compact spans; label is an integer for a
-            non-terminal label. The presence of a label means the span with that
-            label will not be pruned.
-    :param symbolic: If ``True``, parse sentence without regard for
-            probabilities. All Viterbi probabilities will be set to ``1.0``.
     :param beam_beta: keep track of the best score in each cell and only allow
             items which are within a multiple of ``beam_beta`` of the best score.
             Should be a negative log probability. Pass ``0.0`` to disable.
@@ -350,24 +342,19 @@ def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
         raise ValueError('Not a PCFG! fanout: %d' % grammar.maxfanout)
     if not grammar.logprob:
         raise ValueError('Expected grammar with log probabilities.')
+
     if grammar.nonterminals < MAX_DENSE_NTS and \
        len(sent) < MAX_DENSE_LEN:
         chart = DenseCFGChart(grammar, sent, start)
-        if symbolic:
-            return parse_symbolic(sent, < DenseCFGChart > chart, grammar,
-                                  tags=tags, whitelist=whitelist)
-        return parse_main(sent, < DenseCFGChart > chart, grammar, tags,
-                          whitelist, beam_beta, beam_delta)
-    chart = SparseCFGChart(grammar, sent, start)
-    if symbolic:
-        return parse_symbolic(sent, < SparseCFGChart > chart, grammar,
-                              tags=tags, whitelist=whitelist)
-    return parse_main(sent, < SparseCFGChart > chart, grammar, tags,
-                      whitelist, beam_beta, beam_delta)
+        return parse_heap(<DenseCFGChart> chart, sent, grammar,
+                          tags, beam_beta, beam_delta)
+    else:
+        chart = SparseCFGChart(grammar, sent, start)
+        return parse_heap(<SparseCFGChart> chart, sent, grammar,
+                          tags, beam_beta, beam_delta)
 
-
-cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
-                list whitelist, double beam_beta, int beam_delta):
+cdef parse_heap(CFGChart_fused chart, sent, Grammar grammar,
+                tags, double beam_beta, int beam_delta):
     cdef:
         ProbRule * rule
         short last_left, left, mid, right
@@ -385,7 +372,7 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
         short[:, :] minleft, maxleft, minright, maxright
     minleft, maxleft, minright, maxright = minmaxmatrices(grammar.nonterminals,
                                                           lensent)
-    covered, msg = populatepos(grammar, chart, sent, tags, whitelist, True,
+    covered, msg = populatepos(grammar, chart, sent, tags, None, True,
                                minleft, maxleft, minright, maxright,
                                prepared=prepared_doc)
     if not covered:
