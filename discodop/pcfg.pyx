@@ -404,36 +404,9 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
         rule = &(grammar.bylhs[0][ix])
         right = left + span
 
-        # FIXME: There's a non-deterministic bug here somewhere, I'm guessing
-        # some variable isn't being properly initialized.
-        #
-        # With the following code:
-        # from discodop.containers import Grammar; from discodop import pcfg, kbest; from resumes.rafiki import ResumeParser; from util.shared import initialize_logging;
-        # rp = ResumeParser; cfg = Grammar([rp._build_rule("ROOT", "A"), rp._build_rule("A", "A", "A"), (((u'A', u'Epsilon'), (u'walks', )), 1), (((u'A', u'Epsilon'), (u'mary', )), 1)])
-        # initialize_logging();
-        # chart, msg = pcfg.parse([u"mary"] + [u"walks"]*3, cfg)
-        # kbest.lazykbest(chart, 1)
-        #
-        # Sometimes we get this, and sometimes we get this:
-        #
-        # >>> kbest.lazykbest(chart, 1)
-        # ([(u'(ROOT (A (A (A 0) (A 1)) (A (A 2) (A 3))))', 3.295836866004329)], set([]))
-        #
-        # >>> kbest.lazykbest(chart, 1)
-        # 2017-06-08 12:43:13 CRITICAL log_unhandled_exception: Encountered unhandled exception: KeyError: 10
-        # None
-        # Traceback (most recent call last):
-        #   File "<stdin>", line 1, in <module>
-        #   File "discodop/kbest.pyx", line 252, in discodop.kbest.lazykbest (discodop/kbest.c:5155)
-        # KeyError: 10
-        #
-        # => Localized to unary rules that were using uninitialized left + right
-        # non-deterministically from heap. Confirmed this works without unary
-        # rules. Cleanly handle unary rules.
-        #
-        # logging.info("Trying %4d %4d %4d: %s => %s %s [%d]", left, mid, right,
-        #               grammar.tolabel[rule.lhs], grammar.tolabel[rule.rhs1],
-        #               grammar.tolabel[rule.rhs2], ix)
+        logging.info("Trying %4d %4d %4d: %s => %s %s [%d]", left, mid, right,
+                      grammar.tolabel[rule.lhs], grammar.tolabel[rule.rhs1],
+                      grammar.tolabel[rule.rhs2], ix)
         if last_span != span or last_left != left:
             prepared_span = grammar.emission._prepare_span(prepared_unary, sent[left:right]) \
                             if grammar.emission else None
@@ -447,6 +420,14 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                 if chart.updateprob(rule.lhs, left, right, prob, beam):
                     chart.addedge(rule.lhs, left, right, right, NULL)
                     # FIXME: Add to heap here.
+
+        elif not rule.rhs2:
+            cell = cellidx(left, right, lensent, grammar.nonterminals)
+            prob = rule.prob + chart._subtreeprob(cell + rule.rhs1)
+            if not chart.hasitem(cell + rule.lhs) or prob < chart._subtreeprob(cell + rule.lhs):
+                # FIXME: Why aren't we using beam beta here?
+                chart.updateprob(rule.lhs, left, right, prob, 0.0)
+            chart.addedge(rule.lhs, left, right, right, rule)
 
         elif span > 1:
             leftitem = cellidx(left, mid, lensent, grammar.nonterminals) + rule.rhs1
