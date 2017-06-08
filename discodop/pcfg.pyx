@@ -12,7 +12,7 @@ from itertools import count
 import numpy as np
 from .tree import Tree
 from .util import which
-from .plcfrs import DoubleAgenda
+from .plcfrs import DoubleAgenda, Agenda
 from .treebank import TERMINALSRE
 
 cimport cython
@@ -369,36 +369,39 @@ def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
 cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                 list whitelist, double beam_beta, int beam_delta):
     cdef:
-        DoubleAgenda cykagenda, unaryagenda = DoubleAgenda()
+        DoubleAgenda unaryagenda = DoubleAgenda()
         ProbRule * rule
         short left, right, mid, span, lensent = len(sent)
         short last_span, last_left
         size_t cell, lastidx
-        uint32_t lhs = 0, rhs1
+        uint32_t rhs1
         uint32_t ix
 
     last_span = -1
     last_left = -1
     prepared_span = None
 
-    cykagenda = DoubleAgenda([((span, left, mid, ix), cellidx(span, left, lensent, grammar.numrules) + ix, )
-                              for span in xrange(1, lensent + 1)
-                              for left in xrange(lensent - span + 1)
-                              for mid in xrange(left + 1, left + span)
-                              for ix in xrange(grammar.numrules)])
+    iterable = [(span, left, mid, ix)
+                for span in xrange(1, lensent + 1)
+                for left in xrange(lensent - span + 1)
+                for mid in xrange(left + 1, left + span + 1)
+                for ix in xrange(grammar.numrules)]
+    cykagenda = Agenda((it, it) for it in iterable)
     prepared_unary = grammar.emission._prepare_sentence(sent) \
                      if grammar.emission else None
 
+    logging.info("Dumping heap: %s", cykagenda.heap)
     while len(cykagenda.heap):
-        (span, left, mid, ix) = cykagenda.popentry().key
+        (span, left, mid, ix) = cykagenda.popitem()[0]
         rule = &(grammar.bylhs[0][ix])
         right = left + span
 
-        logging.info("Trying %4d %4d %4d: %s => %s %s [%d]", left, right, mid,
+        logging.info("Trying %4d %4d %4d: %s => %s %s [%d]", left, mid, right,
                      grammar.tolabel[rule.lhs], grammar.tolabel[rule.rhs1],
                      grammar.tolabel[rule.rhs2], ix)
         if last_span != span or last_left != left:
-            prepared_span = grammar.emission._prepare_span(prepared_unary, sent[left:right])
+            prepared_span = grammar.emission._prepare_span(prepared_unary, sent[left:right]) \
+                            if grammar.emission else None
 
         # FIXME: MTEs can only have one rule!
         beam = beam_beta if span <= beam_delta else 0.0
