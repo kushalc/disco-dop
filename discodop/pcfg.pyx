@@ -395,6 +395,11 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
     # all spans of length N must be solved before we solve any span of length
     # N+1. In addition, though not required for correctness, left should be next
     # item for cache locality to avoid recomputing _prepare_span unnecessarily.
+    #
+    # FIXME: This is _not_ production-ready. The following effectively doubles
+    # memory usage (compared to dense matrix). This is a functionality-only
+    # refactor that enables contributor-based cell pruning. To make this work,
+    # we need to dynamically manage the heap based on parsing done so far.
     iterable = [(span, left, mid, ix)
                 for span in xrange(1, lensent + 1)
                 for left in xrange(lensent - span + 1)
@@ -420,7 +425,7 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
             if not math.isinf(prob) and not math.isnan(prob):
                 if chart.updateprob(rule.lhs, left, right, prob, beam):
                     chart.addedge(rule.lhs, left, right, right, NULL)
-                    # FIXME: Add to heap here.
+                    # FIXME: Manage heap here.
 
         elif not rule.rhs2:
             item = cellidx(left, right, lensent, grammar.nonterminals) + rule.rhs1
@@ -428,7 +433,7 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                 prob = rule.prob + chart._subtreeprob(item)
                 if chart.updateprob(rule.lhs, left, right, prob, beam):
                     chart.addedge(rule.lhs, left, right, right, rule)
-                    # FIXME: Add to heap here.
+                    # FIXME: Manage heap here.
 
         elif span > 1:
             leftitem = cellidx(left, mid, lensent, grammar.nonterminals) + rule.rhs1
@@ -438,7 +443,7 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                        chart._subtreeprob(rightitem)
                 if chart.updateprob(rule.lhs, left, right, prob, beam):
                     chart.addedge(rule.lhs, left, right, mid, rule)
-                    # FIXME: Add to heap here.
+                    # FIXME: Manage heap here.
 
         last_span = span
         last_left = left
