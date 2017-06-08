@@ -381,6 +381,16 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
     last_left = -1
     prepared_span = None
 
+    # FIXME: Generalize out to above.
+    cdef:
+        short[:, :] minleft, maxleft, minright, maxright
+    minleft, maxleft, minright, maxright = minmaxmatrices(grammar.nonterminals,
+                                                          lensent)
+    covered, msg = populatepos(grammar, chart, sent, tags, whitelist, True,
+                               minleft, maxleft, minright, maxright, None)
+    if not covered:
+        return chart, msg
+
     iterable = [(span, left, mid, ix)
                 for span in xrange(1, lensent + 1)
                 for left in xrange(lensent - span + 1)
@@ -389,16 +399,14 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
     cykagenda = Agenda((it, it) for it in iterable)
     prepared_unary = grammar.emission._prepare_sentence(sent) \
                      if grammar.emission else None
-
-    logging.info("Dumping heap: %s", cykagenda.heap)
     while len(cykagenda.heap):
         (span, left, mid, ix) = cykagenda.popitem()[0]
         rule = &(grammar.bylhs[0][ix])
         right = left + span
 
-        logging.info("Trying %4d %4d %4d: %s => %s %s [%d]", left, mid, right,
-                     grammar.tolabel[rule.lhs], grammar.tolabel[rule.rhs1],
-                     grammar.tolabel[rule.rhs2], ix)
+        # logging.debug("Trying %4d %4d %4d: %s => %s %s [%d]", left, mid, right,
+        #               grammar.tolabel[rule.lhs], grammar.tolabel[rule.rhs1],
+        #               grammar.tolabel[rule.rhs2], ix)
         if last_span != span or last_left != left:
             prepared_span = grammar.emission._prepare_span(prepared_unary, sent[left:right]) \
                             if grammar.emission else None
