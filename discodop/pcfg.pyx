@@ -427,6 +427,10 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
         #   File "discodop/kbest.pyx", line 252, in discodop.kbest.lazykbest (discodop/kbest.c:5155)
         # KeyError: 10
         #
+        # => Localized to unary rules that were using uninitialized left + right
+        # non-deterministically from heap. Confirmed this works without unary
+        # rules. Cleanly handle unary rules.
+        #
         # logging.info("Trying %4d %4d %4d: %s => %s %s [%d]", left, mid, right,
         #               grammar.tolabel[rule.lhs], grammar.tolabel[rule.rhs1],
         #               grammar.tolabel[rule.rhs2], ix)
@@ -454,27 +458,6 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                     chart.addedge(rule.lhs, left, right, mid, rule)
                     # FIXME: Add to heap here.
 
-        if last_span != span:
-            # unary rules
-            lastidx = len(chart.itemsinorder)
-            cell = cellidx(left, right, lensent, grammar.nonterminals)
-            unaryagenda.update_entries([new_DoubleEntry(
-                chart.label(item), chart._subtreeprob(item), 0)
-                for item in chart.itemsinorder[lastidx:]])
-            while unaryagenda.length:
-                rhs1 = unaryagenda.popentry().key
-                for n in range(grammar.numunary):
-                    rule = &(grammar.unary[rhs1][n])
-                    if rule.rhs1 != rhs1:
-                        break
-                    lhs = rule.lhs
-                    prob = rule.prob + chart._subtreeprob(cell + rhs1)
-                    chart.addedge(rule.lhs, left, right, right, rule)
-                    if (not chart.hasitem(cell + rule.lhs)
-                            or prob < chart._subtreeprob(cell + rule.lhs)):
-                        chart.updateprob(rule.lhs, left, right, prob, 0.0)
-                        unaryagenda.setifbetter(rule.lhs, prob)
-            unaryagenda.clear()
         last_span = span
         last_left = left
 
