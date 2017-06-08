@@ -394,7 +394,8 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
         for left in range(lensent - span + 1):
             right = left + span
             cell = cellidx(left, right, lensent, grammar.nonterminals)
-            prepared_span = grammar.emission._prepare_span(prepared_unary, sent[left:right])
+            prepared_span = grammar.emission._prepare_span(prepared_unary, sent[left:right]) \
+                            if grammar.emission else None
             lastidx = len(chart.itemsinorder)
             if whitelist is not None:
                 cellwhitelist = <set > whitelist[
