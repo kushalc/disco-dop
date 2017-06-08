@@ -381,47 +381,44 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
     last_left = -1
     prepared_span = None
 
-    cykagenda = DoubleAgenda([((span, left, ix, 0), cellidx(span, left, lensent, grammar.numrules) + ix, )
+    cykagenda = DoubleAgenda([((span, left, mid, ix), cellidx(span, left, lensent, grammar.numrules) + ix, )
                               for span in xrange(1, lensent + 1)
-                              for left in range(lensent - span + 1)
+                              for left in xrange(lensent - span + 1)
+                              for mid in xrange(left + 1, left + span)
                               for ix in xrange(grammar.numrules)])
     prepared_unary = grammar.emission._prepare_sentence(sent) \
                      if grammar.emission else None
 
     while len(cykagenda.heap):
-        (span, left, ix ,_) = cykagenda.popentry().key
+        (span, left, mid, ix) = cykagenda.popentry().key
         rule = &(grammar.bylhs[0][ix])
         right = left + span
 
-        # logging.info("Trying %4d %4d: %s => %s %s [%d]", span, left, grammar.tolabel[rule.lhs],
-        #              grammar.tolabel[rule.rhs1], grammar.tolabel[rule.rhs2], ix)
+        logging.info("Trying %4d %4d %4d: %s => %s %s [%d]", left, right, mid,
+                     grammar.tolabel[rule.lhs], grammar.tolabel[rule.rhs1],
+                     grammar.tolabel[rule.rhs2], ix)
         if last_span != span or last_left != left:
             prepared_span = grammar.emission._prepare_span(prepared_unary, sent[left:right])
 
         # FIXME: MTEs can only have one rule!
+        beam = beam_beta if span <= beam_delta else 0.0
         if grammar.emission and grammar.emission._is_mte(rule.lhs, span):
             prob = grammar.emission._span_log_proba(rule.lhs, sent[left:right],
                                                     prepared=prepared_span)
             if not math.isinf(prob) and not math.isnan(prob):
-                if chart.updateprob(rule.lhs, left, right, prob,
-                                    beam_beta if span <= beam_delta else 0.0):
+                if chart.updateprob(rule.lhs, left, right, prob, beam):
                     chart.addedge(rule.lhs, left, right, right, NULL)
                     # FIXME: Add to heap here.
 
         elif span > 1:
-            for mid in range(left+1, right):
-                leftitem = cellidx(left, mid,
-                                   lensent, grammar.nonterminals) + rule.rhs1
-                rightitem = cellidx(mid, right,
-                                    lensent, grammar.nonterminals) + rule.rhs2
-                if (chart.hasitem(leftitem)
-                        and chart.hasitem(rightitem)):
-                    prob = (rule.prob + chart._subtreeprob(leftitem)
-                            + chart._subtreeprob(rightitem))
-                    if chart.updateprob(rule.lhs, left, right, prob,
-                                        beam_beta if span <= beam_delta else 0.0):
-                        chart.addedge(rule.lhs, left, right, mid, rule)
-                        # FIXME: Add to heap here.
+            leftitem = cellidx(left, mid, lensent, grammar.nonterminals) + rule.rhs1
+            rightitem = cellidx(mid, right, lensent, grammar.nonterminals) + rule.rhs2
+            if (chart.hasitem(leftitem) and chart.hasitem(rightitem)):
+                prob = rule.prob + chart._subtreeprob(leftitem) + \
+                       chart._subtreeprob(rightitem)
+                if chart.updateprob(rule.lhs, left, right, prob, beam):
+                    chart.addedge(rule.lhs, left, right, mid, rule)
+                    # FIXME: Add to heap here.
 
         if last_span != span:
             # unary rules
