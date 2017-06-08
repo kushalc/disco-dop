@@ -382,10 +382,10 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
     minleft, maxleft, minright, maxright = minmaxmatrices(
         grammar.nonterminals, lensent)
     # assign POS tags
-    prepared_unary = grammar.emission._prepare_sentence(sent) \
-                     if grammar.emission else None
+    prepared_doc = grammar.emission._prepare_doc(sent) \
+                   if grammar.emission else None
     covered, msg = populatepos(grammar, chart, sent, tags, whitelist, False,
-                               minleft, maxleft, minright, maxright, prepared_unary)
+                               minleft, maxleft, minright, maxright, prepared_doc)
     if not covered:
         return chart, msg
 
@@ -394,7 +394,8 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
         for left in range(lensent - span + 1):
             right = left + span
             cell = cellidx(left, right, lensent, grammar.nonterminals)
-            prepared_span = grammar.emission._prepare_span(prepared_unary, sent[left:right])
+            prepared_span = grammar.emission._prepare_span(sent[left:right], prepared=prepared_doc) \
+                            if grammar.emission else None
             lastidx = len(chart.itemsinorder)
             if whitelist is not None:
                 cellwhitelist = <set > whitelist[
