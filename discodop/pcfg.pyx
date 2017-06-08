@@ -353,30 +353,42 @@ def parse(sent, Grammar grammar, tags=None, start=None,
         return parse_heap(<SparseCFGChart> chart, sent, grammar,
                           tags, beam_beta, beam_delta)
 
-cdef parse_heap(CFGChart_fused chart, sent, Grammar grammar,
+cdef parse_heap(CFGChart_fused chart, doc, Grammar grammar,
                 tags, double beam_beta, int beam_delta):
     cdef:
         ProbRule * rule
+        LexicalRule lexrule
         short last_left, left, mid, right
-        short last_span, span, lensent = len(sent)
+        short last_span, span, lendoc = len(doc)
         uint32_t ix
+
+    prepared_doc = grammar.emission._prepare_doc(doc) \
+                   if grammar.emission else None
+    for left, token in enumerate(doc):
+        tag = tags[left] if tags else None
+        matcher = re.compile('%s($|@|\\^|/)' % re.escape(tag)) \
+                  if tag else None
+        rules = grammar.lexical if grammar.emission \
+                else grammar.lexicalbyword.get(unicode(token), [])
+        rules = [lexrule for lexrule in rules
+                 if not matcher or matcher.match(grammar.tolabel[lexrule.lhs])]
+
+        right = left + 1
+        recognized = False
+        for lexrule in rules:
+            prob = grammar.emission._token_log_proba(lexrule.lhs, token, prepared=prepared_doc) \
+                   if grammar.emission else lexrule.prob
+            if chart.updateprob(lexrule.lhs, left, right, prob, beam_beta):
+                chart.addedge(lexrule.lhs, left, right, right, NULL)
+                recognized |= True
+                # FIXME: Manage heap here.
+
+        if not recognized:
+            return chart, "no parse: %s [%d] unrecognized" % (token, left)
 
     last_span = -1
     last_left = -1
-    prepared_doc = grammar.emission._prepare_sentence(sent) \
-                   if grammar.emission else None
     prepared_span = None
-
-    # FIXME: Standardize out to below core loop.
-    cdef:
-        short[:, :] minleft, maxleft, minright, maxright
-    minleft, maxleft, minright, maxright = minmaxmatrices(grammar.nonterminals,
-                                                          lensent)
-    covered, msg = populatepos(grammar, chart, sent, tags, None, True,
-                               minleft, maxleft, minright, maxright,
-                               prepared=prepared_doc)
-    if not covered:
-        return chart, msg
 
     # NOTE: span must be left-most item in naive heap, as we parse bottom-up and
     # all spans of length N must be solved before we solve any span of length
@@ -388,8 +400,8 @@ cdef parse_heap(CFGChart_fused chart, sent, Grammar grammar,
     # refactor that enables contributor-based cell pruning. To make this work,
     # we need to dynamically manage the heap based on parsing done so far.
     iterable = [(span, left, mid, ix)
-                for span in xrange(1, lensent + 1)
-                for left in xrange(lensent - span + 1)
+                for span in xrange(1, lendoc + 1)
+                for left in xrange(lendoc - span + 1)
                 for mid in xrange(left + 1, left + span + 1)
                 for ix in xrange(grammar.numrules)]
     cykagenda = Agenda((it, it) for it in iterable)
@@ -402,12 +414,12 @@ cdef parse_heap(CFGChart_fused chart, sent, Grammar grammar,
         #               grammar.tolabel[rule.lhs], grammar.tolabel[rule.rhs1],
         #               grammar.tolabel[rule.rhs2], ix)
         if last_span != span or last_left != left:
-            prepared_span = grammar.emission._prepare_span(prepared_doc, sent[left:right]) \
+            prepared_span = grammar.emission._prepare_span(doc[left:right], prepared=prepared_doc) \
                             if grammar.emission else None
 
         beam = beam_beta if span <= beam_delta else 0.0
         if grammar.emission and grammar.emission._is_mte(rule.lhs, span):
-            prob = grammar.emission._span_log_proba(rule.lhs, sent[left:right],
+            prob = grammar.emission._span_log_proba(rule.lhs, doc[left:right],
                                                     prepared=prepared_span)
             if not math.isinf(prob) and not math.isnan(prob):
                 if chart.updateprob(rule.lhs, left, right, prob, beam):
@@ -415,7 +427,7 @@ cdef parse_heap(CFGChart_fused chart, sent, Grammar grammar,
                     # FIXME: Manage heap here.
 
         elif not rule.rhs2:
-            item = cellidx(left, right, lensent, grammar.nonterminals) + rule.rhs1
+            item = cellidx(left, right, lendoc, grammar.nonterminals) + rule.rhs1
             if chart.hasitem(item):
                 prob = rule.prob + chart._subtreeprob(item)
                 if chart.updateprob(rule.lhs, left, right, prob, beam):
@@ -423,8 +435,8 @@ cdef parse_heap(CFGChart_fused chart, sent, Grammar grammar,
                     # FIXME: Manage heap here.
 
         elif span > 1:
-            leftitem = cellidx(left, mid, lensent, grammar.nonterminals) + rule.rhs1
-            rightitem = cellidx(mid, right, lensent, grammar.nonterminals) + rule.rhs2
+            leftitem = cellidx(left, mid, lendoc, grammar.nonterminals) + rule.rhs1
+            rightitem = cellidx(mid, right, lendoc, grammar.nonterminals) + rule.rhs2
             if (chart.hasitem(leftitem) and chart.hasitem(rightitem)):
                 prob = rule.prob + chart._subtreeprob(leftitem) + \
                        chart._subtreeprob(rightitem)
