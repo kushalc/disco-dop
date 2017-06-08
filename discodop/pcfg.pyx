@@ -375,35 +375,37 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
         short last_span, last_left
         size_t cell, lastidx
         uint32_t lhs = 0, rhs1
+        uint32_t ix
 
     last_span = -1
     last_left = -1
     prepared_span = None
-    cykagenda = DoubleAgenda([((span, left, rix), cellidx(span, left, lensent, grammar.numrules) + rix, )
+
+    cykagenda = DoubleAgenda([((span, left, ix, 0), cellidx(span, left, lensent, grammar.numrules) + ix, )
                               for span in xrange(1, lensent + 1)
                               for left in range(lensent - span + 1)
-                              for rix in xrange(grammar.numrules)])
+                              for ix in xrange(grammar.numrules)])
     prepared_unary = grammar.emission._prepare_sentence(sent) \
                      if grammar.emission else None
+
     while len(cykagenda.heap):
-        (span, left, rix) = cykagenda.popentry().key
-        rule = &(grammar.bylhs[0][rix])
+        (span, left, ix ,_) = cykagenda.popentry().key
+        rule = &(grammar.bylhs[0][ix])
         right = left + span
 
-        lhs = rule.lhs
+        # logging.info("Trying %4d %4d: %s => %s %s [%d]", span, left, grammar.tolabel[rule.lhs],
+        #              grammar.tolabel[rule.rhs1], grammar.tolabel[rule.rhs2], ix)
         if last_span != span or last_left != left:
             prepared_span = grammar.emission._prepare_span(prepared_unary, sent[left:right])
-            logging.info("Trying %4d %4d: %s => %s %s", span, left, grammar.tolabel[lhs],
-                         grammar.tolabel[rule.rhs1], grammar.tolabel[rule.rhs2])
 
         # FIXME: MTEs can only have one rule!
-        if grammar.emission and grammar.emission._is_mte(lhs, span):
-            prob = grammar.emission._span_log_proba(lhs, sent[left:right],
+        if grammar.emission and grammar.emission._is_mte(rule.lhs, span):
+            prob = grammar.emission._span_log_proba(rule.lhs, sent[left:right],
                                                     prepared=prepared_span)
             if not math.isinf(prob) and not math.isnan(prob):
-                if chart.updateprob(lhs, left, right, prob,
+                if chart.updateprob(rule.lhs, left, right, prob,
                                     beam_beta if span <= beam_delta else 0.0):
-                    chart.addedge(lhs, left, right, right, NULL)
+                    chart.addedge(rule.lhs, left, right, right, NULL)
                     # FIXME: Add to heap here.
 
         elif span > 1:
@@ -416,9 +418,9 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                         and chart.hasitem(rightitem)):
                     prob = (rule.prob + chart._subtreeprob(leftitem)
                             + chart._subtreeprob(rightitem))
-                    if chart.updateprob(lhs, left, right, prob,
+                    if chart.updateprob(rule.lhs, left, right, prob,
                                         beam_beta if span <= beam_delta else 0.0):
-                        chart.addedge(lhs, left, right, mid, rule)
+                        chart.addedge(rule.lhs, left, right, mid, rule)
                         # FIXME: Add to heap here.
 
         if last_span != span:
@@ -436,11 +438,11 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                         break
                     lhs = rule.lhs
                     prob = rule.prob + chart._subtreeprob(cell + rhs1)
-                    chart.addedge(lhs, left, right, right, rule)
-                    if (not chart.hasitem(cell + lhs)
-                            or prob < chart._subtreeprob(cell + lhs)):
-                        chart.updateprob(lhs, left, right, prob, 0.0)
-                        unaryagenda.setifbetter(lhs, prob)
+                    chart.addedge(rule.lhs, left, right, right, rule)
+                    if (not chart.hasitem(cell + rule.lhs)
+                            or prob < chart._subtreeprob(cell + rule.lhs)):
+                        chart.updateprob(rule.lhs, left, right, prob, 0.0)
+                        unaryagenda.setifbetter(rule.lhs, prob)
             unaryagenda.clear()
         last_span = span
         last_left = left
