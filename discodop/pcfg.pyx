@@ -422,12 +422,12 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                     # FIXME: Add to heap here.
 
         elif not rule.rhs2:
-            cell = cellidx(left, right, lensent, grammar.nonterminals)
-            prob = rule.prob + chart._subtreeprob(cell + rule.rhs1)
-            if not chart.hasitem(cell + rule.lhs) or prob < chart._subtreeprob(cell + rule.lhs):
-                # FIXME: Why aren't we using beam beta here?
-                chart.updateprob(rule.lhs, left, right, prob, 0.0)
-            chart.addedge(rule.lhs, left, right, right, rule)
+            item = cellidx(left, right, lensent, grammar.nonterminals) + rule.rhs1
+            if chart.hasitem(item):
+                prob = rule.prob + chart._subtreeprob(item)
+                if chart.updateprob(rule.lhs, left, right, prob, beam):
+                    chart.addedge(rule.lhs, left, right, right, rule)
+                    # FIXME: Add to heap here.
 
         elif span > 1:
             leftitem = cellidx(left, mid, lensent, grammar.nonterminals) + rule.rhs1
