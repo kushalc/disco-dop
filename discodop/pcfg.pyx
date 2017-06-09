@@ -12,7 +12,7 @@ from itertools import count
 import numpy as np
 from .tree import Tree
 from .util import which
-from .plcfrs import DoubleAgenda
+from .plcfrs import DoubleAgenda, Agenda
 from .treebank import TERMINALSRE
 
 cimport cython
@@ -321,8 +321,8 @@ cdef class SparseCFGChart(CFGChart):
         self.probs[item] = prob
 
 
-def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
-          bint symbolic=False, double beam_beta=0.0, int beam_delta=50):
+def parse(sent, Grammar grammar, tags=None, start=None,
+          double beam_beta=0.0, int beam_delta=50):
     """A CKY parser modeled after Bodenstab's 'fast grammar loop'.
 
     :param sent: A sequence of tokens that will be parsed.
@@ -333,14 +333,6 @@ def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
     :param start: integer corresponding to the start symbol that complete
             derivations should be headed by; e.g., ``grammar.toid['ROOT']``.
             If not given, the default specified by ``grammar`` is used.
-    :param whitelist: a list of items that may enter the chart.
-            The whitelist is a list of cells consisting of sets of labels:
-            ``whitelist = [{label1, label2, ...}, ...]``;
-            The cells are indexed as compact spans; label is an integer for a
-            non-terminal label. The presence of a label means the span with that
-            label will not be pruned.
-    :param symbolic: If ``True``, parse sentence without regard for
-            probabilities. All Viterbi probabilities will be set to ``1.0``.
     :param beam_beta: keep track of the best score in each cell and only allow
             items which are within a multiple of ``beam_beta`` of the best score.
             Should be a negative log probability. Pass ``0.0`` to disable.
@@ -350,162 +342,186 @@ def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
         raise ValueError('Not a PCFG! fanout: %d' % grammar.maxfanout)
     if not grammar.logprob:
         raise ValueError('Expected grammar with log probabilities.')
+
     if grammar.nonterminals < MAX_DENSE_NTS and \
        len(sent) < MAX_DENSE_LEN:
         chart = DenseCFGChart(grammar, sent, start)
-        if symbolic:
-            return parse_symbolic(sent, < DenseCFGChart > chart, grammar,
-                                  tags=tags, whitelist=whitelist)
-        return parse_main(sent, < DenseCFGChart > chart, grammar, tags,
-                          whitelist, beam_beta, beam_delta)
-    chart = SparseCFGChart(grammar, sent, start)
-    if symbolic:
-        return parse_symbolic(sent, < SparseCFGChart > chart, grammar,
-                              tags=tags, whitelist=whitelist)
-    return parse_main(sent, < SparseCFGChart > chart, grammar, tags,
-                      whitelist, beam_beta, beam_delta)
+        return _parse_heap(<DenseCFGChart> chart, sent, grammar,
+                           tags, beam_beta, beam_delta)
+    else:
+        chart = SparseCFGChart(grammar, sent, start)
+        return _parse_heap(<SparseCFGChart> chart, sent, grammar,
+                           tags, beam_beta, beam_delta)
 
-
-cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
-                list whitelist, double beam_beta, int beam_delta):
+cdef _parse_heap(CFGChart_fused chart, doc, Grammar grammar,
+                tags, double beam_beta, int beam_delta):
     cdef:
-        short[:, :] minleft, maxleft, minright, maxright
-        DoubleAgenda unaryagenda = DoubleAgenda()
-        set cellwhitelist = None
         ProbRule * rule
-        short left, right, mid, span, lensent = len(sent)
-        short narrowl, narrowr, widel, wider, minmid, maxmid
-        double oldscore, prob
-        uint32_t n, lhs = 0, rhs1
-        size_t cell, lastidx
-        object it = None
-    minleft, maxleft, minright, maxright = minmaxmatrices(
-        grammar.nonterminals, lensent)
-    # assign POS tags
-    prepared_unary = grammar.emission._prepare_sentence(sent) \
-                     if grammar.emission else None
-    covered, msg = populatepos(grammar, chart, sent, tags, whitelist, False,
-                               minleft, maxleft, minright, maxright, prepared_unary)
-    if not covered:
-        return chart, msg
+        LexicalRule lexrule
+        short last_left, left, mid, right
+        short last_span, span, lendoc = len(doc)
+        uint32_t ix
 
-    for span in range(1, lensent + 1):
-        # constituents from left to right
-        for left in range(lensent - span + 1):
-            right = left + span
-            cell = cellidx(left, right, lensent, grammar.nonterminals)
-            prepared_span = grammar.emission._prepare_span(prepared_unary, sent[left:right])
-            lastidx = len(chart.itemsinorder)
-            if whitelist is not None:
-                cellwhitelist = <set > whitelist[
-                    compactcellidx(left, right, lensent, 1)]
-            # apply binary rules; if whitelist is given, loop only over
-            # whitelisted labels for cell; equivalent to:
-            # for lhs in cellwhitelist or range(1, grammar.phrasalnonterminals):
-            if whitelist is None:
-                lhs = 0
-            else:
-                it = iter(cellwhitelist)
-            while True:
-                if whitelist is None:
-                    lhs += 1
-                    if lhs >= grammar.phrasalnonterminals:
-                        break
-                else:
-                    try:
-                        lhs = next(it)
-                    except StopIteration:
-                        break
+    cykagenda = Agenda()
+    prepared_doc = grammar.emission._prepare_doc(doc) \
+                   if grammar.emission else None
+    for left, token in enumerate(doc):
+        tag = tags[left] if tags else None
+        matcher = re.compile('%s($|@|\\^|/)' % re.escape(tag)) \
+                  if tag else None
+        rules = grammar.lexical if grammar.emission \
+                else grammar.lexicalbyword.get(unicode(token), [])
+        rules = [lexrule for lexrule in rules
+                 if not matcher or matcher.match(grammar.tolabel[lexrule.lhs])]
 
-                # FIXME: MTEs can only have one rule!
-                n = 0
-                rule = &(grammar.bylhs[lhs][n])
-                oldscore = chart._subtreeprob(cell + lhs)
+        right = left + 1
+        recognized = False
+        for lexrule in rules:
+            prob = grammar.emission._token_log_proba(lexrule.lhs, token, prepared=prepared_doc) \
+                   if grammar.emission else lexrule.prob
+            if chart.updateprob(lexrule.lhs, left, right, prob, beam_beta):
+                chart.addedge(lexrule.lhs, left, right, right, NULL)
+                recognized |= True
+            _add_agenda_rules(cykagenda, grammar, lexrule.lhs,
+                              left, right, lendoc)
 
-                if grammar.emission and grammar.emission._is_mte(lhs, span):
-                    prob = grammar.emission._span_log_proba(lhs, sent[left:right],
-                                                            prepared=prepared_span)
-                    if not math.isinf(prob) and not math.isnan(prob):
-                        if chart.updateprob(lhs, left, right, prob,
-                                            beam_beta if span <= beam_delta else 0.0):
-                            chart.addedge(lhs, left, right, right, NULL)
+        if not recognized:
+            return chart, "no parse: %s [%d] unrecognized" % (token, left)
 
-                elif span > 1:
-                    while rule.lhs == lhs:
-                        narrowr = minright[rule.rhs1, left]
-                        narrowl = minleft[rule.rhs2, right]
-                        if (rule.rhs2 == 0 or narrowr >= right or narrowl < narrowr
-                                or TESTBIT(grammar.mask, rule.no)):
-                            n += 1
-                            rule = &(grammar.bylhs[lhs][n])
-                            continue
-                        widel = maxleft[rule.rhs2, right]
-                        minmid = narrowr if narrowr > widel else widel
-                        wider = maxright[rule.rhs1, left]
-                        maxmid = wider if wider < narrowl else narrowl
-                        for mid in range(minmid, maxmid + 1):
-                            leftitem = cellidx(left, mid,
-                                               lensent, grammar.nonterminals) + rule.rhs1
-                            rightitem = cellidx(mid, right,
-                                                lensent, grammar.nonterminals) + rule.rhs2
-                            if (chart.hasitem(leftitem)
-                                    and chart.hasitem(rightitem)):
-                                prob = (rule.prob + chart._subtreeprob(leftitem)
-                                        + chart._subtreeprob(rightitem))
-                                if chart.updateprob(lhs, left, right, prob,
-                                                    beam_beta if span <= beam_delta else 0.0):
-                                    chart.addedge(lhs, left, right, mid, rule)
-                        n += 1
-                        rule = &(grammar.bylhs[lhs][n])
+    last_span = -1
+    last_left = -1
+    prepared_span = None
 
-                # update filter
-                if isinf(oldscore):
-                    if not chart.hasitem(cell + lhs):
-                        continue
-                    if left > minleft[lhs, right]:
-                        minleft[lhs, right] = left
-                    if left < maxleft[lhs, right]:
-                        maxleft[lhs, right] = left
-                    if right < minright[lhs, left]:
-                        minright[lhs, left] = right
-                    if right > maxright[lhs, left]:
-                        maxright[lhs, left] = right
+    # NOTE: Naive heaps don't work: the number of entries in the heap becomes
+    # very large and starts consuming more memory than the chart itself.
+    #
+    # 2017-06-08 22:54:12 INFO classify: Starting span 1: 758 (heap size); items 12858, edges 12858
+    # 2017-06-08 22:54:14 INFO classify: Starting span 2: 501774 (heap size); items 13620, edges 13873
+    # 2017-06-08 22:54:16 INFO classify: Starting span 3: 968067 (heap size); items 14334, edges 14825
+    # ...
+    # 2017-06-08 23:34:12 INFO classify: Starting span 31: 79142545 (heap size); items 25374, edges 114243
+    # 2017-06-08 23:36:56 INFO classify: Starting span 32: 81615874 (heap size); items 25548, edges 117839
+    # 2017-06-08 23:40:12 INFO classify: Starting span 33: 83940922 (heap size); items 25710, edges 121295
+    #
+    # The heap itself doesn't take much CPU resource, but it appears we start
+    # encountering memory contention.
+    #
+    # 2017-06-08 23:41:44 INFO _instrument_latency: Completed _add_agenda_rules in 0.001s
+    # 2017-06-08 23:41:44 INFO _instrument_latency: Completed _add_agenda_rules in 0.009s
+    # 2017-06-08 23:41:44 INFO _instrument_latency: Completed _add_agenda_rules in 0.001s
+    while len(cykagenda.heap):
+        (span, left, mid, ix) = cykagenda.popitem()[0]
+        rule = &(grammar.bylhs[0][grammar.revmap[ix]])
+        right = left + span
 
-            # unary rules
-            unaryagenda.update_entries([new_DoubleEntry(
-                chart.label(item), chart._subtreeprob(item), 0)
-                for item in chart.itemsinorder[lastidx:]])
-            while unaryagenda.length:
-                rhs1 = unaryagenda.popentry().key
-                for n in range(grammar.numunary):
-                    rule = &(grammar.unary[rhs1][n])
-                    if rule.rhs1 != rhs1:
-                        break
-                    elif TESTBIT(grammar.mask, rule.no) or (
-                            whitelist is not None
-                            and rule.lhs not in cellwhitelist):
-                        continue
-                    lhs = rule.lhs
-                    prob = rule.prob + chart._subtreeprob(cell + rhs1)
-                    chart.addedge(lhs, left, right, right, rule)
-                    if (not chart.hasitem(cell + lhs)
-                            or prob < chart._subtreeprob(cell + lhs)):
-                        chart.updateprob(lhs, left, right, prob, 0.0)
-                        unaryagenda.setifbetter(lhs, prob)
-                    # update filter
-                    if left > minleft[lhs, right]:
-                        minleft[lhs, right] = left
-                    if left < maxleft[lhs, right]:
-                        maxleft[lhs, right] = left
-                    if right < minright[lhs, left]:
-                        minright[lhs, left] = right
-                    if right > maxright[lhs, left]:
-                        maxright[lhs, left] = right
-            unaryagenda.clear()
+        if last_span != span:
+            logging.info("Starting span %d: %d (heap size); %s",
+                         span, len(cykagenda.heap), chart.stats())
+
+        # logging.info("Trying %4d [%4d, %4d, %4d]: %s => %s %s [%d]", span, left, mid, right,
+        #               grammar.tolabel[rule.lhs], grammar.tolabel[rule.rhs1],
+        #               grammar.tolabel[rule.rhs2], rule.no)
+        if last_span != span or last_left != left:
+            prepared_span = grammar.emission._prepare_span(doc[left:right], prepared=prepared_doc) \
+                            if grammar.emission else None
+
+        beam = beam_beta if span <= beam_delta else 0.0
+        if grammar._is_mte(rule.lhs, span):
+            prob = grammar.emission._span_log_proba(rule.lhs, doc[left:right],
+                                                    prepared=prepared_span)
+            if not math.isinf(prob) and not math.isnan(prob):
+                if chart.updateprob(rule.lhs, left, right, prob, beam):
+                    chart.addedge(rule.lhs, left, right, right, NULL)
+                _add_agenda_rules(cykagenda, grammar, rule.lhs,
+                                  left, right, lendoc)
+
+        elif not rule.rhs2:
+            item = cellidx(left, right, lendoc, grammar.nonterminals) + rule.rhs1
+            if chart.hasitem(item):
+                prob = rule.prob + chart._subtreeprob(item)
+                if chart.updateprob(rule.lhs, left, right, prob, beam):
+                    chart.addedge(rule.lhs, left, right, right, rule)
+                _add_agenda_rules(cykagenda, grammar, rule.lhs,
+                                  left, right, lendoc)
+
+        elif span > 1:
+            leftitem = cellidx(left, mid, lendoc, grammar.nonterminals) + rule.rhs1
+            rightitem = cellidx(mid, right, lendoc, grammar.nonterminals) + rule.rhs2
+            if (chart.hasitem(leftitem) and chart.hasitem(rightitem)):
+                prob = rule.prob + chart._subtreeprob(leftitem) + \
+                       chart._subtreeprob(rightitem)
+                if chart.updateprob(rule.lhs, left, right, prob, beam):
+                    chart.addedge(rule.lhs, left, right, mid, rule)
+                _add_agenda_rules(cykagenda, grammar, rule.lhs,
+                                  left, right, lendoc)
+
+        last_span = span
+        last_left = left
+
     if not chart:
         return chart, 'no parse ' + chart.stats()
     return chart, chart.stats()
 
+# Add all rules where (a) lhs is rhs2 with [left, right] as [midpoint, right]
+# (b) lhs is rhs1 with [left, right] as [left, midpoint], and (c) lhs is rhs1
+# with [left, right] as [left, right] for unary.
+cdef _add_agenda_rules(agenda, Grammar grammar, uint32_t lhs,
+                       short left, short right, short lendoc):
+    cdef:
+        ProbRule * rule
+    base = right - left
+    emission = grammar.emission
+
+    # NOTE: Working with these arrays is a bitch. If you don't handle them
+    # properly, the cython compiler will crash and give you a big stacktrace.
+    # They're too fragile and too much of a pain to factor up and DRY, so we're
+    # copy-pasting the whole handler loop here. The concise Python-ic solution
+    # does _not_ work:
+    #
+    # agenda.update(*[(it, it) for it in [(base + span, left, right + span, rule.no)
+    #                                     for rule in grammar.lbinary[lhs]
+    #                                     for span in xrange(1, lendoc - right + 1)]])
+    rules = []
+
+    # Handle when this rule's LHS is another rule's left binary RHS.
+    for ix in xrange(grammar.numrules):
+        rule = &(grammar.lbinary[lhs][ix])
+        if rule.rhs1 != lhs:
+            break
+
+        constraints = (emission._lhs_spans[rule.rhs2] or [1, lendoc - right])[:2]
+        constraints[1] = min(constraints[1], lendoc - right)
+        for span in xrange(*constraints):
+            rules += [(base + span, left, right, rule.no)]
+
+    # Now handle when LHS is the right binary RHS.
+    for ix in xrange(grammar.numrules):
+        rule = &(grammar.rbinary[lhs][ix])
+        if rule.rhs2 != lhs:
+            break
+
+        constraints = (emission._lhs_spans[rule.rhs1] or [1, left + 1])[:2]
+        constraints[1] = min(constraints[1], left + 1)
+        for span in xrange(*constraints):
+            rules += [(base + span, left - span, left, rule.no)]
+
+    # Finally handle when is the unary RHS.
+    for ix in xrange(grammar.numrules):
+        rule = &(grammar.unary[lhs][ix])
+        if rule.rhs1 != lhs:
+            break
+        rules += [(base, left, right, rule.no)]
+
+    # logging.info("Adding rules: %s [%4d, %4d] => %s",
+    #              grammar.tolabel[lhs], left, right, rules)
+    _update_agenda(agenda, set(rules))
+    return rules
+
+# FIXME: Optimize this as a batch update.
+cdef _update_agenda(agenda, entries):
+    for entry in entries:
+        agenda[entry] = entry
+    return agenda
 
 cdef parse_symbolic(sent, CFGChart_fused chart, Grammar grammar,
                     tags=None, list whitelist=None):
