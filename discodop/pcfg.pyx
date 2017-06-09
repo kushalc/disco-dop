@@ -391,6 +391,24 @@ cdef _parse_heap(CFGChart_fused chart, doc, Grammar grammar,
     last_span = -1
     last_left = -1
     prepared_span = None
+
+    # NOTE: Naive heaps don't work: the number of entries in the heap becomes
+    # very large and starts consuming more memory than the chart itself.
+    #
+    # 2017-06-08 22:54:12 INFO classify: Starting span 1: 758 (heap size); items 12858, edges 12858
+    # 2017-06-08 22:54:14 INFO classify: Starting span 2: 501774 (heap size); items 13620, edges 13873
+    # 2017-06-08 22:54:16 INFO classify: Starting span 3: 968067 (heap size); items 14334, edges 14825
+    # ...
+    # 2017-06-08 23:34:12 INFO classify: Starting span 31: 79142545 (heap size); items 25374, edges 114243
+    # 2017-06-08 23:36:56 INFO classify: Starting span 32: 81615874 (heap size); items 25548, edges 117839
+    # 2017-06-08 23:40:12 INFO classify: Starting span 33: 83940922 (heap size); items 25710, edges 121295
+    #
+    # The heap itself doesn't take much CPU resource, but it appears we start
+    # encountering memory contention.
+    #
+    # 2017-06-08 23:41:44 INFO _instrument_latency: Completed _add_agenda_rules in 0.001s
+    # 2017-06-08 23:41:44 INFO _instrument_latency: Completed _add_agenda_rules in 0.009s
+    # 2017-06-08 23:41:44 INFO _instrument_latency: Completed _add_agenda_rules in 0.001s
     while len(cykagenda.heap):
         (span, left, mid, ix) = cykagenda.popitem()[0]
         rule = &(grammar.bylhs[0][grammar.revmap[ix]])
