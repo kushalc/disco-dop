@@ -182,6 +182,9 @@ cdef class Grammar:
             raise ValueError('no rules found')
         return fanoutdict
 
+    def _is_mte(self, lhs, span):
+        return self.emission and self.emission._is_mte(lhs, span)
+
     def _convertlexicon(self, fanoutdict):
         """ Make objects for lexical rules. """
         cdef int x

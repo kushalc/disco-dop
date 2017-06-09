@@ -426,7 +426,7 @@ cdef _parse_heap(CFGChart_fused chart, doc, Grammar grammar,
                             if grammar.emission else None
 
         beam = beam_beta if span <= beam_delta else 0.0
-        if grammar.emission and grammar.emission._is_mte(rule.lhs, span):
+        if grammar._is_mte(rule.lhs, span):
             prob = grammar.emission._span_log_proba(rule.lhs, doc[left:right],
                                                     prepared=prepared_span)
             if not math.isinf(prob) and not math.isnan(prob):
@@ -470,6 +470,7 @@ cdef _add_agenda_rules(agenda, Grammar grammar, uint32_t lhs,
     cdef:
         ProbRule * rule
     base = right - left
+    emission = grammar.emission
 
     # NOTE: Working with these arrays is a bitch. If you don't handle them
     # properly, the cython compiler will crash and give you a big stacktrace.
@@ -487,16 +488,22 @@ cdef _add_agenda_rules(agenda, Grammar grammar, uint32_t lhs,
         rule = &(grammar.lbinary[lhs][ix])
         if rule.rhs1 != lhs:
             break
-        rules += [(base + span, left, right, rule.no)
-                  for span in xrange(1, lendoc - right)]
+
+        constraints = (emission._lhs_spans[rule.rhs2] or [1, lendoc - right])[:2]
+        constraints[1] = min(constraints[1], lendoc - right)
+        for span in xrange(*constraints):
+            rules += [(base + span, left, right, rule.no)]
 
     # Now handle when LHS is the right binary RHS.
     for ix in xrange(grammar.numrules):
         rule = &(grammar.rbinary[lhs][ix])
         if rule.rhs2 != lhs:
             break
-        rules += [(base + span, left - span, left, rule.no)
-                  for span in xrange(1, left + 1)]
+
+        constraints = (emission._lhs_spans[rule.rhs1] or [1, left + 1])[:2]
+        constraints[1] = min(constraints[1], left + 1)
+        for span in xrange(*constraints):
+            rules += [(base + span, left - span, left, rule.no)]
 
     # Finally handle when is the unary RHS.
     for ix in xrange(grammar.numrules):
@@ -507,7 +514,7 @@ cdef _add_agenda_rules(agenda, Grammar grammar, uint32_t lhs,
 
     # logging.info("Adding rules: %s [%4d, %4d] => %s",
     #              grammar.tolabel[lhs], left, right, rules)
-    _update_agenda(agenda, rules)
+    _update_agenda(agenda, set(rules))
     return rules
 
 # FIXME: Optimize this as a batch update.
