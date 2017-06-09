@@ -396,9 +396,9 @@ cdef _parse_heap(CFGChart_fused chart, doc, Grammar grammar,
         rule = &(grammar.bylhs[0][grammar.revmap[ix]])
         right = left + span
 
-        # logging.info("Trying %4d %4d %4d: %s => %s %s [%d]", left, mid, right,
+        # logging.info("Trying %4d [%4d, %4d, %4d]: %s => %s %s [%d]", span, left, mid, right,
         #               grammar.tolabel[rule.lhs], grammar.tolabel[rule.rhs1],
-        #               grammar.tolabel[rule.rhs2], ix)
+        #               grammar.tolabel[rule.rhs2], rule.no)
         if last_span != span or last_left != left:
             prepared_span = grammar.emission._prepare_span(doc[left:right], prepared=prepared_doc) \
                             if grammar.emission else None
@@ -410,8 +410,8 @@ cdef _parse_heap(CFGChart_fused chart, doc, Grammar grammar,
             if not math.isinf(prob) and not math.isnan(prob):
                 if chart.updateprob(rule.lhs, left, right, prob, beam):
                     chart.addedge(rule.lhs, left, right, right, NULL)
-                    _add_agenda_rules(cykagenda, grammar, rule.lhs,
-                                      left, right, lendoc)
+                  _add_agenda_rules(cykagenda, grammar, rule.lhs,
+                                    left, right, lendoc)
 
         elif not rule.rhs2:
             item = cellidx(left, right, lendoc, grammar.nonterminals) + rule.rhs1
@@ -459,34 +459,39 @@ cdef _add_agenda_rules(agenda, Grammar grammar, uint32_t lhs,
     #                                     for rule in grammar.lbinary[lhs]
     #                                     for span in xrange(1, lendoc - right + 1)]])
     rules = []
+
+    # Handle when this rule's LHS is another rule's left binary RHS.
     for ix in xrange(grammar.numrules):
         rule = &(grammar.lbinary[lhs][ix])
-        if rule.lhs != lhs:
+        if rule.rhs1 != lhs:
             break
         rules += [(base + span, left, right + span, rule.no)
                   for span in xrange(1, lendoc - right + 1)]
-    _update_agenda(agenda, rules)
 
-    rules = []
+    # Now handle when LHS is the right binary RHS.
     for ix in xrange(grammar.numrules):
         rule = &(grammar.rbinary[lhs][ix])
-        if rule.lhs != lhs:
+        if rule.rhs2 != lhs:
             break
         rules += [(base + span, left - span, right, rule.no)
                   for span in xrange(1, left + 1)]
-    _update_agenda(agenda, rules)
 
-    rules = []
+    # Finally handle when is the unary RHS.
     for ix in xrange(grammar.numrules):
         rule = &(grammar.unary[lhs][ix])
-        if rule.lhs != lhs:
+        if rule.rhs1 != lhs:
             break
         rules += [(base, left, right, rule.no)]
-    _update_agenda(agenda, rules)
-    return agenda
 
-cdef _update_agenda(agenda, rules):
-    agenda.update(*[(rule, rule) for rule in rules])
+    # logging.info("Adding rules: %s [%4d, %4d] => %s",
+    #              grammar.tolabel[lhs], left, right, rules)
+    _update_agenda(agenda, rules)
+    return rules
+
+# FIXME: Optimize this as a batch update.
+cdef _update_agenda(agenda, entries):
+    for entry in entries:
+        agenda[entry] = entry
     return agenda
 
 cdef parse_symbolic(sent, CFGChart_fused chart, Grammar grammar,
