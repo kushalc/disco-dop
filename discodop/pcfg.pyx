@@ -440,20 +440,54 @@ cdef _parse_heap(CFGChart_fused chart, doc, Grammar grammar,
         return chart, 'no parse ' + chart.stats()
     return chart, chart.stats()
 
-# FIXME: Add all rules where (a) lhs is rhs2 with [left, right] as [midpoint,
-# right] (b) lhs is rhs1 with [left, right] as [left, midpoint], and (c) lhs is
-# rhs1 with [left, right] as [left, right] for unary.
-cdef _add_agenda_rules(agenda, Grammar grammar, str lhs,
+# Add all rules where (a) lhs is rhs2 with [left, right] as [midpoint, right]
+# (b) lhs is rhs1 with [left, right] as [left, midpoint], and (c) lhs is rhs1
+# with [left, right] as [left, right] for unary.
+cdef _add_agenda_rules(agenda, Grammar grammar, uint32_t lhs,
                        short left, short right, short lendoc):
+    cdef:
+        ProbRule * rule
     base = right - left
-    agenda.update(*[(it, it) for it in [(base + span, left, right + span, rule.no)
-                                        for rule in grammar.lbinary[lhs]
-                                        for span in xrange(1, lendoc - right + 1)]])
-    agenda.update(*[(it, it) for it in [(base + span, left - span, right, rule.no)
-                                        for rule in grammar.rbinary[lhs]
-                                        for span in xrange(1, left + 1)]])
-    agenda.update(*[(it, it) for it in [(base, left, right, rule.no)
-                                        for rule in grammar.unary[lhs]]])
+
+    # NOTE: Working with these arrays is a bitch. If you don't handle them
+    # properly, the cython compiler will crash and give you a big stacktrace.
+    # They're too fragile and too much of a pain to factor up and DRY, so we're
+    # copy-pasting the whole handler loop here. The concise Python-ic solution
+    # does _not_ work:
+    #
+    # agenda.update(*[(it, it) for it in [(base + span, left, right + span, rule.no)
+    #                                     for rule in grammar.lbinary[lhs]
+    #                                     for span in xrange(1, lendoc - right + 1)]])
+    rules = []
+    for ix in xrange(grammar.numrules):
+        rule = &(grammar.lbinary[lhs][ix])
+        if rule.lhs != lhs:
+            break
+        rules += [(base + span, left, right + span, rule.no)
+                  for span in xrange(1, lendoc - right + 1)]
+    _update_agenda(agenda, rules)
+
+    rules = []
+    for ix in xrange(grammar.numrules):
+        rule = &(grammar.rbinary[lhs][ix])
+        if rule.lhs != lhs:
+            break
+        rules += [(base + span, left - span, right, rule.no)
+                  for span in xrange(1, left + 1)]
+    _update_agenda(agenda, rules)
+
+    rules = []
+    for ix in xrange(grammar.numrules):
+        rule = &(grammar.unary[lhs][ix])
+        if rule.lhs != lhs:
+            break
+        rules += [(base, left, right, rule.no)]
+    _update_agenda(agenda, rules)
+    return agenda
+
+cdef _update_agenda(agenda, rules):
+    agenda.update(*[(rule, rule) for rule in rules])
+    return agenda
 
 cdef parse_symbolic(sent, CFGChart_fused chart, Grammar grammar,
                     tags=None, list whitelist=None):
