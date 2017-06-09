@@ -396,6 +396,10 @@ cdef _parse_heap(CFGChart_fused chart, doc, Grammar grammar,
         rule = &(grammar.bylhs[0][grammar.revmap[ix]])
         right = left + span
 
+        if last_span != span:
+            logging.info("Starting span %d: %d (heap size); %s",
+                         span, len(cykagenda.heap), chart.stats())
+
         # logging.info("Trying %4d [%4d, %4d, %4d]: %s => %s %s [%d]", span, left, mid, right,
         #               grammar.tolabel[rule.lhs], grammar.tolabel[rule.rhs1],
         #               grammar.tolabel[rule.rhs2], rule.no)
