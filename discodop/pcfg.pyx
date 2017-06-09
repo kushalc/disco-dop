@@ -381,7 +381,8 @@ cdef _parse_heap(CFGChart_fused chart, doc, Grammar grammar,
                    if grammar.emission else lexrule.prob
             if chart.updateprob(lexrule.lhs, left, right, prob, beam_beta):
                 chart.addedge(lexrule.lhs, left, right, right, NULL)
-                _add_agenda_rules(cykagenda, grammar, lexrule.lhs, left, right)
+                _add_agenda_rules(cykagenda, grammar, lexrule.lhs,
+                                  left, right, lendoc)
                 recognized |= True
 
         if not recognized:
@@ -392,7 +393,7 @@ cdef _parse_heap(CFGChart_fused chart, doc, Grammar grammar,
     prepared_span = None
     while len(cykagenda.heap):
         (span, left, mid, ix) = cykagenda.popitem()[0]
-        rule = &(grammar.bylhs[0][ix])
+        rule = &(grammar.bylhs[0][grammar.revmap[ix]])
         right = left + span
 
         # logging.info("Trying %4d %4d %4d: %s => %s %s [%d]", left, mid, right,
@@ -409,7 +410,8 @@ cdef _parse_heap(CFGChart_fused chart, doc, Grammar grammar,
             if not math.isinf(prob) and not math.isnan(prob):
                 if chart.updateprob(rule.lhs, left, right, prob, beam):
                     chart.addedge(rule.lhs, left, right, right, NULL)
-                    _add_agenda_rules(cykagenda, grammar, rule.lhs, left, right)
+                    _add_agenda_rules(cykagenda, grammar, rule.lhs,
+                                      left, right, lendoc)
 
         elif not rule.rhs2:
             item = cellidx(left, right, lendoc, grammar.nonterminals) + rule.rhs1
@@ -417,7 +419,8 @@ cdef _parse_heap(CFGChart_fused chart, doc, Grammar grammar,
                 prob = rule.prob + chart._subtreeprob(item)
                 if chart.updateprob(rule.lhs, left, right, prob, beam):
                     chart.addedge(rule.lhs, left, right, right, rule)
-                    _add_agenda_rules(cykagenda, grammar, rule.lhs, left, right)
+                    _add_agenda_rules(cykagenda, grammar, rule.lhs,
+                                      left, right, lendoc)
 
         elif span > 1:
             leftitem = cellidx(left, mid, lendoc, grammar.nonterminals) + rule.rhs1
@@ -427,7 +430,8 @@ cdef _parse_heap(CFGChart_fused chart, doc, Grammar grammar,
                        chart._subtreeprob(rightitem)
                 if chart.updateprob(rule.lhs, left, right, prob, beam):
                     chart.addedge(rule.lhs, left, right, mid, rule)
-                    _add_agenda_rules(cykagenda, grammar, rule.lhs, left, right)
+                    _add_agenda_rules(cykagenda, grammar, rule.lhs,
+                                      left, right, lendoc)
 
         last_span = span
         last_left = left
@@ -440,8 +444,16 @@ cdef _parse_heap(CFGChart_fused chart, doc, Grammar grammar,
 # right] (b) lhs is rhs1 with [left, right] as [left, midpoint], and (c) lhs is
 # rhs1 with [left, right] as [left, right] for unary.
 cdef _add_agenda_rules(agenda, Grammar grammar, str lhs,
-                       short left, short right):
-    return
+                       short left, short right, short lendoc):
+    base = right - left
+    agenda.update(*[(it, it) for it in [(base + span, left, right + span, rule.no)
+                                        for rule in grammar.lbinary[lhs]
+                                        for span in xrange(1, lendoc - right + 1)]])
+    agenda.update(*[(it, it) for it in [(base + span, left - span, right, rule.no)
+                                        for rule in grammar.rbinary[lhs]
+                                        for span in xrange(1, left + 1)]])
+    agenda.update(*[(it, it) for it in [(base, left, right, rule.no)
+                                        for rule in grammar.unary[lhs]]])
 
 cdef parse_symbolic(sent, CFGChart_fused chart, Grammar grammar,
                     tags=None, list whitelist=None):
