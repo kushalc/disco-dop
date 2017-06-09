@@ -381,9 +381,9 @@ cdef _parse_heap(CFGChart_fused chart, doc, Grammar grammar,
                    if grammar.emission else lexrule.prob
             if chart.updateprob(lexrule.lhs, left, right, prob, beam_beta):
                 chart.addedge(lexrule.lhs, left, right, right, NULL)
-                _add_agenda_rules(cykagenda, grammar, lexrule.lhs,
-                                  left, right, lendoc)
                 recognized |= True
+            _add_agenda_rules(cykagenda, grammar, lexrule.lhs,
+                              left, right, lendoc)
 
         if not recognized:
             return chart, "no parse: %s [%d] unrecognized" % (token, left)
@@ -410,8 +410,8 @@ cdef _parse_heap(CFGChart_fused chart, doc, Grammar grammar,
             if not math.isinf(prob) and not math.isnan(prob):
                 if chart.updateprob(rule.lhs, left, right, prob, beam):
                     chart.addedge(rule.lhs, left, right, right, NULL)
-                  _add_agenda_rules(cykagenda, grammar, rule.lhs,
-                                    left, right, lendoc)
+                _add_agenda_rules(cykagenda, grammar, rule.lhs,
+                                  left, right, lendoc)
 
         elif not rule.rhs2:
             item = cellidx(left, right, lendoc, grammar.nonterminals) + rule.rhs1
@@ -419,8 +419,8 @@ cdef _parse_heap(CFGChart_fused chart, doc, Grammar grammar,
                 prob = rule.prob + chart._subtreeprob(item)
                 if chart.updateprob(rule.lhs, left, right, prob, beam):
                     chart.addedge(rule.lhs, left, right, right, rule)
-                    _add_agenda_rules(cykagenda, grammar, rule.lhs,
-                                      left, right, lendoc)
+                _add_agenda_rules(cykagenda, grammar, rule.lhs,
+                                  left, right, lendoc)
 
         elif span > 1:
             leftitem = cellidx(left, mid, lendoc, grammar.nonterminals) + rule.rhs1
@@ -430,8 +430,8 @@ cdef _parse_heap(CFGChart_fused chart, doc, Grammar grammar,
                        chart._subtreeprob(rightitem)
                 if chart.updateprob(rule.lhs, left, right, prob, beam):
                     chart.addedge(rule.lhs, left, right, mid, rule)
-                    _add_agenda_rules(cykagenda, grammar, rule.lhs,
-                                      left, right, lendoc)
+                _add_agenda_rules(cykagenda, grammar, rule.lhs,
+                                  left, right, lendoc)
 
         last_span = span
         last_left = left
@@ -465,15 +465,15 @@ cdef _add_agenda_rules(agenda, Grammar grammar, uint32_t lhs,
         rule = &(grammar.lbinary[lhs][ix])
         if rule.rhs1 != lhs:
             break
-        rules += [(base + span, left, right + span, rule.no)
-                  for span in xrange(1, lendoc - right + 1)]
+        rules += [(base + span, left, right, rule.no)
+                  for span in xrange(1, lendoc - right)]
 
     # Now handle when LHS is the right binary RHS.
     for ix in xrange(grammar.numrules):
         rule = &(grammar.rbinary[lhs][ix])
         if rule.rhs2 != lhs:
             break
-        rules += [(base + span, left - span, right, rule.no)
+        rules += [(base + span, left - span, left, rule.no)
                   for span in xrange(1, left + 1)]
 
     # Finally handle when is the unary RHS.
