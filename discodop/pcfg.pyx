@@ -366,8 +366,8 @@ cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
 
     prepared_doc = grammar.emission._prepare_doc(sent) if grammar.emission else None
     minleft, maxleft, minright, maxright = minmaxmatrices(grammar.nonterminals, lensent)
-    covered, msg = populatepos(grammar, chart, sent, tags, minleft, maxleft,
-                               minright, maxright, prepared_doc)
+    covered, msg = _populate_pos(grammar, chart, sent, tags, minleft, maxleft,
+                                 minright, maxright, prepared_doc)
     if not covered:
         return chart, msg
 
@@ -474,10 +474,10 @@ cdef _handle_unary(CFGChart_fused chart, Grammar grammar,
                            minleft, maxleft, minright, maxright)
     unaryagenda.clear()
 
-cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags,
-                 short[:, :] minleft, short[:, :] maxleft,
-                 short[:, :] minright, short[:, :] maxright,
-                 prepared=None):
+cdef _populate_pos(Grammar grammar, CFGChart_fused chart, sent, tags,
+                   short[:, :] minleft, short[:, :] maxleft,
+                   short[:, :] minright, short[:, :] maxright,
+                   prepared=None):
     """Apply all possible lexical and unary rules on each lexical span.
 
     :returns: a tuple ``(success, msg)`` where ``success`` is True if a POS tag
