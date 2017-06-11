@@ -394,6 +394,9 @@ cdef class Grammar:
         # sentinel rule
         dest[0][m].lhs = dest[0][m].rhs1 = dest[0][m].rhs2 = self.nonterminals
 
+    def _is_mte(self, lhs):
+        return self.emission and self.emission._is_mte(lhs)
+
     def register(self, name, weights):
         """Register a probabilistic model given a name and a sequence of
         floats ``weights``, with weights in the same order as
