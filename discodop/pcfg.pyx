@@ -357,13 +357,12 @@ cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
                   tags, double beam_beta, int beam_delta):
     cdef:
         short[:, :] minleft, maxleft, minright, maxright
-        DoubleAgenda unaryagenda = DoubleAgenda()
         ProbRule * rule
         short left, right, mid, span, lensent = len(sent)
         short narrowl, narrowr, minmid, maxmid
         double oldscore, prob
-        uint32_t n, lhs = 0, rhs1
-        size_t cell, lastidx
+        uint32_t n, lhs = 0
+        size_t cell
 
     prepared_doc = grammar.emission._prepare_doc(sent) if grammar.emission else None
     minleft, maxleft, minright, maxright = minmaxmatrices(grammar.nonterminals, lensent)
@@ -419,28 +418,9 @@ cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
                     _update_filter(chart, cell + lhs, lhs, left, right,
                                    minleft, maxleft, minright, maxright)
 
-            # unary rules
-            unaryagenda.update_entries([new_DoubleEntry(
-                chart.label(item), chart._subtreeprob(item), 0)
-                for item in chart.itemsinorder[lastidx:]])
-            while unaryagenda.length:
-                rhs1 = unaryagenda.popentry().key
-                for n in range(grammar.numunary):
-                    rule = &(grammar.unary[rhs1][n])
-                    if rule.rhs1 != rhs1:
-                        break
+            _handle_unary(chart, grammar, cell, left, right, lensent,
+                          minleft, maxleft, minright, maxright)
 
-                    lhs = rule.lhs
-                    prob = rule.prob + chart._subtreeprob(cell + rhs1)
-                    chart.addedge(lhs, left, right, right, rule)
-                    if (not chart.hasitem(cell + lhs) or
-                        prob < chart._subtreeprob(cell + lhs)):
-                        chart.updateprob(lhs, left, right, prob, 0.0)
-                        unaryagenda.setifbetter(lhs, prob)
-
-                    _update_filter(chart, cell + lhs, lhs, left, right,
-                                   minleft, maxleft, minright, maxright)
-            unaryagenda.clear()
     if not chart:
         return chart, 'no parse ' + chart.stats()
     return chart, chart.stats()
@@ -458,6 +438,42 @@ cdef _update_filter(CFGChart_fused chart, size_t cellidx, uint32_t lhs,
     if right > maxright[lhs, left]:
         maxright[lhs, left] = right
 
+cdef _handle_unary(CFGChart_fused chart, Grammar grammar,
+                   size_t cell, short left, short right, short lensent,
+                   short[:, :] minleft, short[:, :] maxleft,
+                   short[:, :] minright, short[:, :] maxright):
+    cdef:
+        DoubleAgenda unaryagenda = DoubleAgenda()
+        ProbRule * rule
+        double prob
+        uint32_t n, lhs, rhs1
+        size_t lastidx
+
+    # unary rules
+    lastidx = len(chart.itemsinorder)
+    unaryagenda.update_entries([
+        new_DoubleEntry(chart.label(item), chart._subtreeprob(item), 0)
+        for item in chart.itemsinorder[lastidx:]
+    ])
+    while unaryagenda.length:
+        rhs1 = unaryagenda.popentry().key
+        for n in range(grammar.numunary):
+            rule = &(grammar.unary[rhs1][n])
+            if rule.rhs1 != rhs1:
+                break
+
+            lhs = rule.lhs
+            prob = rule.prob + chart._subtreeprob(cell + rhs1)
+            chart.addedge(lhs, left, right, right, rule)
+            if (not chart.hasitem(cell + lhs) or
+                prob < chart._subtreeprob(cell + lhs)):
+                chart.updateprob(lhs, left, right, prob, 0.0)
+                unaryagenda.setifbetter(lhs, prob)
+
+            _update_filter(chart, cell + lhs, lhs, left, right,
+                           minleft, maxleft, minright, maxright)
+    unaryagenda.clear()
+
 cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags,
                  short[:, :] minleft, short[:, :] maxleft,
                  short[:, :] minright, short[:, :] maxright,
@@ -467,10 +483,8 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags,
     :returns: a tuple ``(success, msg)`` where ``success`` is True if a POS tag
     was found for every word in the sentence."""
     cdef:
-        DoubleAgenda unaryagenda = DoubleAgenda()
-        ProbRule * rule
         LexicalRule lexrule
-        uint32_t n, lhs, rhs1
+        uint32_t lhs
         short left, right, lensent = len(sent)
 
     for left, word in enumerate(sent):
@@ -486,6 +500,7 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags,
         # uses grammar specificity as an optimization and we're breaking that by
         # using all possible lexrules here.
         orth = unicode(word)
+        cell = cellidx(left, right, lensent, grammar.nonterminals)
         for lexrule in grammar.lexical if grammar.emission else \
                        grammar.lexicalbyword.get(orth, ()):
             lhs = lexrule.lhs
@@ -494,41 +509,15 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags,
                      if grammar.emission else lexrule.prob
                 if math.isinf(pr) or math.isnan(pr):
                     continue
+                recognized |= True
 
                 chart.addedge(lhs, left, right, right, NULL)
                 chart.updateprob(lhs, left, right, pr, 0.0)
-                unaryagenda.setitem(lhs, pr)
                 # logging.debug("Added to UnaryAgenda: %s [%s] => %0.3f",
                 #               orth.strip(), grammar.tolabel[lhs], pr)
+                _update_filter(chart, cell, lhs, left, right, minleft, maxleft,
+                               minright, maxright)
 
-                recognized = True
-                # update filter
-                if left > minleft[lhs, right]:
-                    minleft[lhs, right] = left
-                if left < maxleft[lhs, right]:
-                    maxleft[lhs, right] = left
-                if right < minright[lhs, left]:
-                    minright[lhs, left] = right
-                if right > maxright[lhs, left]:
-                    maxright[lhs, left] = right
-        # NB: use gold tags if given, even if (word, tag) was not part of
-        # training data, modulo state splits etc.
-        if not recognized and tag is not None:
-            for lhs in grammar.lexicalbylhs:
-                if tagre.match(grammar.tolabel[lhs]):
-                    chart.addedge(lhs, left, right, right, NULL)
-                    chart.updateprob(lhs, left, right, 0.0, 0.0)
-                    unaryagenda.setitem(lhs, 0.0)
-                    recognized = True
-                    # update filter
-                    if left > minleft[lhs, right]:
-                        minleft[lhs, right] = left
-                    if left < maxleft[lhs, right]:
-                        maxleft[lhs, right] = left
-                    if right < minright[lhs, left]:
-                        minright[lhs, left] = right
-                    if right > maxright[lhs, left]:
-                        maxright[lhs, left] = right
         if not recognized:
             if tag is None and orth not in grammar.lexicalbyword:
                 return chart, 'no parse: %r not in lexicon' % word
@@ -536,34 +525,9 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags,
                 return chart, 'no parse: unknown tag %r' % tag
             return chart, 'no parse: all tags for %r blocked' % word
 
-        # unary rules on the span of this POS tag
-        while unaryagenda.length:
-            rhs1 = unaryagenda.popentry().key
-            for n in range(grammar.numunary):
-                rule = &(grammar.unary[rhs1][n])
-                if rule.rhs1 != rhs1:
-                    break
-                lhs = rule.lhs
-                item = cellidx(left, right, lensent, grammar.nonterminals) + lhs
-                # FIXME can vit.prob change while entry in agenda?
-                # prob = rule.prob + entry.value
-                prob = rule.prob + chart._subtreeprob(cellidx(
-                    left, right, lensent, grammar.nonterminals) + rhs1)
-                if (not chart.hasitem(item) or
-                        prob < chart._subtreeprob(item)):
-                    unaryagenda.setifbetter(lhs, prob)
-                chart.addedge(lhs, left, right, right, rule)
-                chart.updateprob(lhs, left, right, prob, 0.0)
+        _handle_unary(chart, grammar, cell, left, right, lensent,
+                      minleft, maxleft, minright, maxright)
 
-                # update filter
-                if left > minleft[lhs, right]:
-                    minleft[lhs, right] = left
-                if left < maxleft[lhs, right]:
-                    maxleft[lhs, right] = left
-                if right < minright[lhs, left]:
-                    minright[lhs, left] = right
-                if right > maxright[lhs, left]:
-                    maxright[lhs, left] = right
     return True, ''
 
 
