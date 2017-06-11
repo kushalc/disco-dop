@@ -321,8 +321,8 @@ cdef class SparseCFGChart(CFGChart):
         self.probs[item] = prob
 
 
-def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
-          bint symbolic=False, double beam_beta=0.0, int beam_delta=50):
+def parse(sent, Grammar grammar, tags=None, start=None,
+          double beam_beta=0.0, int beam_delta=50):
     """A CKY parser modeled after Bodenstab's 'fast grammar loop'.
 
     :param sent: A sequence of tokens that will be parsed.
@@ -333,14 +333,6 @@ def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
     :param start: integer corresponding to the start symbol that complete
             derivations should be headed by; e.g., ``grammar.toid['ROOT']``.
             If not given, the default specified by ``grammar`` is used.
-    :param whitelist: a list of items that may enter the chart.
-            The whitelist is a list of cells consisting of sets of labels:
-            ``whitelist = [{label1, label2, ...}, ...]``;
-            The cells are indexed as compact spans; label is an integer for a
-            non-terminal label. The presence of a label means the span with that
-            label will not be pruned.
-    :param symbolic: If ``True``, parse sentence without regard for
-            probabilities. All Viterbi probabilities will be set to ``1.0``.
     :param beam_beta: keep track of the best score in each cell and only allow
             items which are within a multiple of ``beam_beta`` of the best score.
             Should be a negative log probability. Pass ``0.0`` to disable.
@@ -350,42 +342,37 @@ def parse(sent, Grammar grammar, tags=None, start=None, list whitelist=None,
         raise ValueError('Not a PCFG! fanout: %d' % grammar.maxfanout)
     if not grammar.logprob:
         raise ValueError('Expected grammar with log probabilities.')
+
     if grammar.nonterminals < MAX_DENSE_NTS and \
        len(sent) < MAX_DENSE_LEN:
         chart = DenseCFGChart(grammar, sent, start)
-        if symbolic:
-            return parse_symbolic(sent, < DenseCFGChart > chart, grammar,
-                                  tags=tags, whitelist=whitelist)
-        return parse_main(sent, < DenseCFGChart > chart, grammar, tags,
-                          whitelist, beam_beta, beam_delta)
-    chart = SparseCFGChart(grammar, sent, start)
-    if symbolic:
-        return parse_symbolic(sent, < SparseCFGChart > chart, grammar,
-                              tags=tags, whitelist=whitelist)
-    return parse_main(sent, < SparseCFGChart > chart, grammar, tags,
-                      whitelist, beam_beta, beam_delta)
+        return _parse_clean(sent, < DenseCFGChart > chart, grammar,
+                            tags, beam_beta, beam_delta)
+    else:
+        chart = SparseCFGChart(grammar, sent, start)
+        return _parse_clean(sent, < SparseCFGChart > chart, grammar,
+                            tags, beam_beta, beam_delta)
 
-
-cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
-                list whitelist, double beam_beta, int beam_delta):
+cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
+                  tags, double beam_beta, int beam_delta):
     cdef:
         short[:, :] minleft, maxleft, minright, maxright
         DoubleAgenda unaryagenda = DoubleAgenda()
-        set cellwhitelist = None
         ProbRule * rule
         short left, right, mid, span, lensent = len(sent)
         short narrowl, narrowr, widel, wider, minmid, maxmid
         double oldscore, prob
         uint32_t n, lhs = 0, rhs1
         size_t cell, lastidx
-        object it = None
+
     minleft, maxleft, minright, maxright = minmaxmatrices(
         grammar.nonterminals, lensent)
+
     # assign POS tags
     prepared_doc = grammar.emission._prepare_doc(sent) \
                    if grammar.emission else None
-    covered, msg = populatepos(grammar, chart, sent, tags, whitelist, False,
-                               minleft, maxleft, minright, maxright, prepared_doc)
+    covered, msg = populatepos(grammar, chart, sent, tags, minleft, maxleft,
+                               minright, maxright, prepared_doc)
     if not covered:
         return chart, msg
 
@@ -397,27 +384,11 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
             prepared_span = grammar.emission._prepare_span(sent[left:right], prepared=prepared_doc) \
                             if grammar.emission else None
             lastidx = len(chart.itemsinorder)
-            if whitelist is not None:
-                cellwhitelist = <set > whitelist[
-                    compactcellidx(left, right, lensent, 1)]
+
             # apply binary rules; if whitelist is given, loop only over
             # whitelisted labels for cell; equivalent to:
             # for lhs in cellwhitelist or range(1, grammar.phrasalnonterminals):
-            if whitelist is None:
-                lhs = 0
-            else:
-                it = iter(cellwhitelist)
-            while True:
-                if whitelist is None:
-                    lhs += 1
-                    if lhs >= grammar.phrasalnonterminals:
-                        break
-                else:
-                    try:
-                        lhs = next(it)
-                    except StopIteration:
-                        break
-
+            for lhs in xrange(grammar.phrasalnonterminals):
                 # FIXME: MTEs can only have one rule!
                 n = 0
                 rule = &(grammar.bylhs[lhs][n])
@@ -482,10 +453,6 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
                     rule = &(grammar.unary[rhs1][n])
                     if rule.rhs1 != rhs1:
                         break
-                    elif TESTBIT(grammar.mask, rule.no) or (
-                            whitelist is not None
-                            and rule.lhs not in cellwhitelist):
-                        continue
                     lhs = rule.lhs
                     prob = rule.prob + chart._subtreeprob(cell + rhs1)
                     chart.addedge(lhs, left, right, right, rule)
@@ -508,125 +475,8 @@ cdef parse_main(sent, CFGChart_fused chart, Grammar grammar, tags,
     return chart, chart.stats()
 
 
-cdef parse_symbolic(sent, CFGChart_fused chart, Grammar grammar,
-                    tags=None, list whitelist=None):
-    cdef:
-        short[:, :] minleft, maxleft, minright, maxright
-        list unaryagenda
-        set cellwhitelist = None
-        object it = None
-        ProbRule * rule
-        short left, right, mid, span, lensent = len(sent)
-        short narrowl, narrowr, widel, wider, minmid, maxmid
-        uint32_t n, lhs = 0, rhs1
-        size_t cell, lastidx
-        bint haditem
-    minleft, maxleft, minright, maxright = minmaxmatrices(
-        grammar.nonterminals, lensent)
-    # assign POS tags
-    covered, msg = populatepos(grammar, chart, sent, tags, whitelist, True,
-                               minleft, maxleft, minright, maxright, None)
-    if not covered:
-        return chart, msg
-
-    for span in range(2, lensent + 1):
-        # constituents from left to right
-        for left in range(lensent - span + 1):
-            right = left + span
-            cell = cellidx(left, right, lensent, grammar.nonterminals)
-            lastidx = len(chart.itemsinorder)
-            if whitelist is not None:
-                cellwhitelist = <set > whitelist[
-                    compactcellidx(left, right, lensent, 1)]
-            # apply binary rules; if whitelist is given, loop only over
-            # whitelisted labels for cell
-            # for lhs in (range(1, grammar.phrasalnonterminals)
-            # 		if whitelist is None else cellwhitelist):
-            if whitelist is None:
-                lhs = 0
-            else:
-                it = iter(cellwhitelist)
-            while True:
-                if whitelist is None:
-                    lhs += 1
-                    if lhs >= grammar.phrasalnonterminals:
-                        break
-                else:
-                    try:
-                        lhs = next(it)
-                    except StopIteration:
-                        break
-                n = 0
-                rule = &(grammar.bylhs[lhs][n])
-                haditem = chart.hasitem(cell + lhs)
-                while rule.lhs == lhs:
-                    narrowr = minright[rule.rhs1, left]
-                    narrowl = minleft[rule.rhs2, right]
-                    if (rule.rhs2 == 0 or narrowr >= right or narrowl < narrowr
-                            or TESTBIT(grammar.mask, rule.no)):
-                        n += 1
-                        rule = &(grammar.bylhs[lhs][n])
-                        continue
-                    widel = maxleft[rule.rhs2, right]
-                    minmid = narrowr if narrowr > widel else widel
-                    wider = maxright[rule.rhs1, left]
-                    maxmid = wider if wider < narrowl else narrowl
-                    for mid in range(minmid, maxmid + 1):
-                        leftitem = cellidx(left, mid,
-                                           lensent, grammar.nonterminals) + rule.rhs1
-                        rightitem = cellidx(mid, right,
-                                            lensent, grammar.nonterminals) + rule.rhs2
-                        if (chart.hasitem(leftitem)
-                                and chart.hasitem(rightitem)):
-                            chart.addedge(lhs, left, right, mid, rule)
-                            chart.updateprob(lhs, left, right, 0.0, 0.0)
-                    n += 1
-                    rule = &(grammar.bylhs[lhs][n])
-
-                # update filter
-                if not haditem and chart.hasitem(cell + lhs):
-                    if left > minleft[lhs, right]:
-                        minleft[lhs, right] = left
-                    if left < maxleft[lhs, right]:
-                        maxleft[lhs, right] = left
-                    if right < minright[lhs, left]:
-                        minright[lhs, left] = right
-                    if right > maxright[lhs, left]:
-                        maxright[lhs, left] = right
-
-            # unary rules
-            unaryagenda = [chart.label(item)
-                           for item in chart.itemsinorder[lastidx:]]
-            while unaryagenda:
-                rhs1 = unaryagenda.pop()
-                for n in range(grammar.numunary):
-                    rule = &(grammar.unary[rhs1][n])
-                    if rule.rhs1 != rhs1:
-                        break
-                    elif TESTBIT(grammar.mask, rule.no) or (
-                            whitelist is not None
-                            and rule.lhs not in cellwhitelist):
-                        continue
-                    lhs = rule.lhs
-                    chart.addedge(lhs, left, right, right, rule)
-                    if not chart.hasitem(cell + lhs):
-                        chart.updateprob(lhs, left, right, 0.0, 0.0)
-                    # update filter
-                    if left > minleft[lhs, right]:
-                        minleft[lhs, right] = left
-                    if left < maxleft[lhs, right]:
-                        maxleft[lhs, right] = left
-                    if right < minright[lhs, left]:
-                        minright[lhs, left] = right
-                    if right > maxright[lhs, left]:
-                        maxright[lhs, left] = right
-    if not chart:
-        return chart, 'no parse ' + chart.stats()
-    return chart, chart.stats()
-
-
-cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
-                 bint symbolic, short[:, :] minleft, short[:, :] maxleft,
+cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags,
+                 short[:, :] minleft, short[:, :] maxleft,
                  short[:, :] minright, short[:, :] maxright,
                  prepared=None):
     """Apply all possible lexical and unary rules on each lexical span.
@@ -655,17 +505,10 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
         orth = unicode(word)
         for lexrule in grammar.lexical if grammar.emission else \
                        grammar.lexicalbyword.get(orth, ()):
-            # assert whitelist is None or cell in whitelist, whitelist.keys()
-            if whitelist is not None and lexrule.lhs not in whitelist[
-                    compactcellidx(left, right, lensent, 1)]:
-                continue
-
             lhs = lexrule.lhs
             if tag is None or tagre.match(grammar.tolabel[lhs]):
-                pr = 0.000
-                if not symbolic:
-                    pr = grammar.emission._token_log_proba(lhs, word, prepared=prepared) \
-                         if grammar.emission else lexrule.prob
+                pr = grammar.emission._token_log_proba(lhs, word, prepared=prepared) \
+                     if grammar.emission else lexrule.prob
                 if math.isinf(pr) or math.isnan(pr):
                     continue
 
@@ -704,7 +547,7 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
                     if right > maxright[lhs, left]:
                         maxright[lhs, left] = right
         if not recognized:
-            if tag is None and word not in grammar.lexicalbyword:
+            if tag is None and orth not in grammar.lexicalbyword:
                 return chart, 'no parse: %r not in lexicon' % word
             elif tag is not None and tag not in grammar.toid:
                 return chart, 'no parse: unknown tag %r' % tag
@@ -717,11 +560,6 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
                 rule = &(grammar.unary[rhs1][n])
                 if rule.rhs1 != rhs1:
                     break
-                elif TESTBIT(grammar.mask, rule.no) or (
-                    whitelist is not None
-                    and rule.lhs not in whitelist[
-                        compactcellidx(left, right, lensent, 1)]):
-                    continue
                 lhs = rule.lhs
                 item = cellidx(left, right, lensent, grammar.nonterminals) + lhs
                 # FIXME can vit.prob change while entry in agenda?
@@ -732,8 +570,8 @@ cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags, whitelist,
                         prob < chart._subtreeprob(item)):
                     unaryagenda.setifbetter(lhs, prob)
                 chart.addedge(lhs, left, right, right, rule)
-                chart.updateprob(lhs, left, right,
-                                 0.0 if symbolic else prob, 0.0)
+                chart.updateprob(lhs, left, right, prob, 0.0)
+
                 # update filter
                 if left > minleft[lhs, right]:
                     minleft[lhs, right] = left
