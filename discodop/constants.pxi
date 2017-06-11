@@ -29,7 +29,7 @@ DEF MAX_LOGPROB = 300.0
 # NOTE: This is effectively a limit on how many tokens a resume can have, in
 # particular assuming a complete binary tree (not true, since parse trees are
 # unbalanced), 2^10 = 1K, 2^20 = 1000K, etc.
-DEF MAX_DEPTH = 32
+DEF MAX_DEPTH = 256
 
 # The maximum number of NTs before we switch to a SparseCFGChart.
 DEF MAX_DENSE_NTS = 20000
