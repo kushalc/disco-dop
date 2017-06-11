@@ -356,6 +356,7 @@ def parse(sent, Grammar grammar, tags=None, start=None,
 cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
                   tags, double beam_beta, int beam_delta):
     cdef:
+        DoubleAgenda unaryagenda = DoubleAgenda()
         short[:, :] minleft, maxleft, minright, maxright
         ProbRule * rule
         short left, right, mid, span, lensent = len(sent)
@@ -366,18 +367,23 @@ cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
 
     prepared_doc = grammar.emission._prepare_doc(sent) if grammar.emission else None
     minleft, maxleft, minright, maxright = minmaxmatrices(grammar.nonterminals, lensent)
-    covered, msg = _populate_pos(grammar, chart, sent, tags, minleft, maxleft,
-                                 minright, maxright, prepared_doc)
+    covered, msg = _populate_pos(grammar, chart, unaryagenda, sent, tags,
+                                 minleft, maxleft, minright, maxright,
+                                 prepared_doc)
     if not covered:
         return chart, msg
 
     for span in range(1, lensent + 1):
         for left in range(lensent - span + 1):
             right = left + span
+
+            # NOTE: lastidx isn't used for awhile, but it's necessary for
+            # _handle_unary to work since it'll do one pass on all LHSes added
+            # for this (left, span) pair.
+            lastidx = len(chart.itemsinorder)
             cell = cellidx(left, right, lensent, grammar.nonterminals)
             prepared_span = grammar.emission._prepare_span(sent[left:right], prepared=prepared_doc) \
                             if grammar.emission else None
-            lastidx = len(chart.itemsinorder)
 
             beam = beam_beta if span <= beam_delta else 0.0
             for lhs in xrange(grammar.phrasalnonterminals):
@@ -394,10 +400,12 @@ cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
                         rule = &(grammar.bylhs[lhs][n])
                         if rule.lhs != lhs:
                             break
+                        elif not rule.rhs2:
+                            continue
 
                         narrowr = minright[rule.rhs1, left]
                         narrowl = minleft[rule.rhs2, right]
-                        if (rule.rhs2 == 0 or narrowr >= right or narrowl < narrowr):
+                        if narrowr >= right or narrowl < narrowr:
                             continue
 
                         minmid = max(narrowr, maxleft[rule.rhs2, right])
@@ -415,17 +423,18 @@ cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
                 if isinf(oldscore):
                     if not chart.hasitem(cell + lhs):
                         continue
-                    _update_filter(chart, cell + lhs, lhs, left, right,
-                                   minleft, maxleft, minright, maxright)
+                    _update_filter(chart, lhs, left, right, minleft, maxleft,
+                                   minright, maxright)
 
-            _handle_unary(chart, grammar, cell, left, right, lensent,
-                          minleft, maxleft, minright, maxright)
+            _handle_unary(chart, grammar, unaryagenda, cell, lastidx,
+                          left, right, lensent, minleft, maxleft, minright,
+                          maxright)
 
     if not chart:
         return chart, 'no parse ' + chart.stats()
     return chart, chart.stats()
 
-cdef _update_filter(CFGChart_fused chart, size_t cellidx, uint32_t lhs,
+cdef _update_filter(CFGChart_fused chart, uint32_t lhs,
                     short left, short right,
                     short[:, :] minleft, short[:, :] maxleft,
                     short[:, :] minright, short[:, :] maxright):
@@ -438,19 +447,16 @@ cdef _update_filter(CFGChart_fused chart, size_t cellidx, uint32_t lhs,
     if right > maxright[lhs, left]:
         maxright[lhs, left] = right
 
-cdef _handle_unary(CFGChart_fused chart, Grammar grammar,
-                   size_t cell, short left, short right, short lensent,
+cdef _handle_unary(CFGChart_fused chart, Grammar grammar, DoubleAgenda unaryagenda,
+                   size_t cell, size_t lastidx, short left, short right, short lensent,
                    short[:, :] minleft, short[:, :] maxleft,
                    short[:, :] minright, short[:, :] maxright):
     cdef:
-        DoubleAgenda unaryagenda = DoubleAgenda()
         ProbRule * rule
         double prob
         uint32_t n, lhs, rhs1
-        size_t lastidx
 
     # unary rules
-    lastidx = len(chart.itemsinorder)
     unaryagenda.update_entries([
         new_DoubleEntry(chart.label(item), chart._subtreeprob(item), 0)
         for item in chart.itemsinorder[lastidx:]
@@ -470,11 +476,12 @@ cdef _handle_unary(CFGChart_fused chart, Grammar grammar,
                 chart.updateprob(lhs, left, right, prob, 0.0)
                 unaryagenda.setifbetter(lhs, prob)
 
-            _update_filter(chart, cell + lhs, lhs, left, right,
-                           minleft, maxleft, minright, maxright)
+            _update_filter(chart, lhs, left, right, minleft, maxleft,
+                           minright, maxright)
     unaryagenda.clear()
 
-cdef _populate_pos(Grammar grammar, CFGChart_fused chart, sent, tags,
+cdef _populate_pos(Grammar grammar, CFGChart_fused chart, DoubleAgenda unaryagenda,
+                   sent, tags,
                    short[:, :] minleft, short[:, :] maxleft,
                    short[:, :] minright, short[:, :] maxright,
                    prepared=None):
@@ -486,6 +493,7 @@ cdef _populate_pos(Grammar grammar, CFGChart_fused chart, sent, tags,
         LexicalRule lexrule
         uint32_t lhs
         short left, right, lensent = len(sent)
+        size_t cell, lastidx = len(chart.itemsinorder)
 
     for left, word in enumerate(sent):
         tag = tags[left] if tags else None
@@ -510,12 +518,13 @@ cdef _populate_pos(Grammar grammar, CFGChart_fused chart, sent, tags,
                 if math.isinf(pr) or math.isnan(pr):
                     continue
                 recognized |= True
-
+                unaryagenda.setitem(lhs, 0.0)
                 chart.addedge(lhs, left, right, right, NULL)
                 chart.updateprob(lhs, left, right, pr, 0.0)
+
                 # logging.debug("Added to UnaryAgenda: %s [%s] => %0.3f",
                 #               orth.strip(), grammar.tolabel[lhs], pr)
-                _update_filter(chart, cell, lhs, left, right, minleft, maxleft,
+                _update_filter(chart, lhs, left, right, minleft, maxleft,
                                minright, maxright)
 
         if not recognized:
@@ -525,7 +534,7 @@ cdef _populate_pos(Grammar grammar, CFGChart_fused chart, sent, tags,
                 return chart, 'no parse: unknown tag %r' % tag
             return chart, 'no parse: all tags for %r blocked' % word
 
-        _handle_unary(chart, grammar, cell, left, right, lensent,
+        _handle_unary(chart, grammar, unaryagenda, cell, lastidx, left, right, lensent,
                       minleft, maxleft, minright, maxright)
 
     return True, ''
