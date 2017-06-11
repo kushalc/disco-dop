@@ -322,6 +322,9 @@ cdef class Grammar:
             n += 1
         assert n == self.numrules, (n, self.numrules)
 
+    def _is_mte(self, lhs):
+      return self.emission and self.emission._is_mte(lhs)
+
     def _normalize(self):
         """Optionally normalize frequencies to relative frequencies.
         Should be run during initialization."""

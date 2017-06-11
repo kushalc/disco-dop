@@ -360,24 +360,19 @@ cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
         DoubleAgenda unaryagenda = DoubleAgenda()
         ProbRule * rule
         short left, right, mid, span, lensent = len(sent)
-        short narrowl, narrowr, widel, wider, minmid, maxmid
+        short narrowl, narrowr, minmid, maxmid
         double oldscore, prob
         uint32_t n, lhs = 0, rhs1
         size_t cell, lastidx
 
-    minleft, maxleft, minright, maxright = minmaxmatrices(
-        grammar.nonterminals, lensent)
-
-    # assign POS tags
-    prepared_doc = grammar.emission._prepare_doc(sent) \
-                   if grammar.emission else None
+    prepared_doc = grammar.emission._prepare_doc(sent) if grammar.emission else None
+    minleft, maxleft, minright, maxright = minmaxmatrices(grammar.nonterminals, lensent)
     covered, msg = populatepos(grammar, chart, sent, tags, minleft, maxleft,
                                minright, maxright, prepared_doc)
     if not covered:
         return chart, msg
 
     for span in range(1, lensent + 1):
-        # constituents from left to right
         for left in range(lensent - span + 1):
             right = left + span
             cell = cellidx(left, right, lensent, grammar.nonterminals)
@@ -385,63 +380,44 @@ cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
                             if grammar.emission else None
             lastidx = len(chart.itemsinorder)
 
-            # apply binary rules; if whitelist is given, loop only over
-            # whitelisted labels for cell; equivalent to:
-            # for lhs in cellwhitelist or range(1, grammar.phrasalnonterminals):
+            beam = beam_beta if span <= beam_delta else 0.0
             for lhs in xrange(grammar.phrasalnonterminals):
-                # FIXME: MTEs can only have one rule!
-                n = 0
-                rule = &(grammar.bylhs[lhs][n])
                 oldscore = chart._subtreeprob(cell + lhs)
-
-                if grammar.emission and grammar.emission._is_mte(lhs, span):
+                if grammar._is_mte(lhs):
                     prob = grammar.emission._span_log_proba(lhs, sent[left:right],
                                                             prepared=prepared_span)
                     if not math.isinf(prob) and not math.isnan(prob):
-                        if chart.updateprob(lhs, left, right, prob,
-                                            beam_beta if span <= beam_delta else 0.0):
+                        if chart.updateprob(lhs, left, right, prob, beam):
                             chart.addedge(lhs, left, right, right, NULL)
 
                 elif span > 1:
-                    while rule.lhs == lhs:
+                    for n in xrange(grammar.numbinary):
+                        rule = &(grammar.bylhs[lhs][n])
+                        if rule.lhs != lhs:
+                            break
+
                         narrowr = minright[rule.rhs1, left]
                         narrowl = minleft[rule.rhs2, right]
-                        if (rule.rhs2 == 0 or narrowr >= right or narrowl < narrowr
-                                or TESTBIT(grammar.mask, rule.no)):
-                            n += 1
-                            rule = &(grammar.bylhs[lhs][n])
+                        if (rule.rhs2 == 0 or narrowr >= right or narrowl < narrowr):
                             continue
-                        widel = maxleft[rule.rhs2, right]
-                        minmid = narrowr if narrowr > widel else widel
-                        wider = maxright[rule.rhs1, left]
-                        maxmid = wider if wider < narrowl else narrowl
+
+                        minmid = max(narrowr, maxleft[rule.rhs2, right])
+                        maxmid = min(narrowl, maxright[rule.rhs1, left])
                         for mid in range(minmid, maxmid + 1):
-                            leftitem = cellidx(left, mid,
-                                               lensent, grammar.nonterminals) + rule.rhs1
-                            rightitem = cellidx(mid, right,
-                                                lensent, grammar.nonterminals) + rule.rhs2
-                            if (chart.hasitem(leftitem)
-                                    and chart.hasitem(rightitem)):
-                                prob = (rule.prob + chart._subtreeprob(leftitem)
-                                        + chart._subtreeprob(rightitem))
-                                if chart.updateprob(lhs, left, right, prob,
-                                                    beam_beta if span <= beam_delta else 0.0):
+                            leftitem = cellidx(left, mid, lensent, grammar.nonterminals) + rule.rhs1
+                            rightitem = cellidx(mid, right, lensent, grammar.nonterminals) + rule.rhs2
+                            if (chart.hasitem(leftitem) and chart.hasitem(rightitem)):
+                                prob = (rule.prob + chart._subtreeprob(leftitem) +
+                                        chart._subtreeprob(rightitem))
+                                if chart.updateprob(lhs, left, right, prob, beam):
                                     chart.addedge(lhs, left, right, mid, rule)
-                        n += 1
-                        rule = &(grammar.bylhs[lhs][n])
 
                 # update filter
                 if isinf(oldscore):
                     if not chart.hasitem(cell + lhs):
                         continue
-                    if left > minleft[lhs, right]:
-                        minleft[lhs, right] = left
-                    if left < maxleft[lhs, right]:
-                        maxleft[lhs, right] = left
-                    if right < minright[lhs, left]:
-                        minright[lhs, left] = right
-                    if right > maxright[lhs, left]:
-                        maxright[lhs, left] = right
+                    _update_filter(chart, cell + lhs, lhs, left, right,
+                                   minleft, maxleft, minright, maxright)
 
             # unary rules
             unaryagenda.update_entries([new_DoubleEntry(
@@ -453,27 +429,34 @@ cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
                     rule = &(grammar.unary[rhs1][n])
                     if rule.rhs1 != rhs1:
                         break
+
                     lhs = rule.lhs
                     prob = rule.prob + chart._subtreeprob(cell + rhs1)
                     chart.addedge(lhs, left, right, right, rule)
-                    if (not chart.hasitem(cell + lhs)
-                            or prob < chart._subtreeprob(cell + lhs)):
+                    if (not chart.hasitem(cell + lhs) or
+                        prob < chart._subtreeprob(cell + lhs)):
                         chart.updateprob(lhs, left, right, prob, 0.0)
                         unaryagenda.setifbetter(lhs, prob)
-                    # update filter
-                    if left > minleft[lhs, right]:
-                        minleft[lhs, right] = left
-                    if left < maxleft[lhs, right]:
-                        maxleft[lhs, right] = left
-                    if right < minright[lhs, left]:
-                        minright[lhs, left] = right
-                    if right > maxright[lhs, left]:
-                        maxright[lhs, left] = right
+
+                    _update_filter(chart, cell + lhs, lhs, left, right,
+                                   minleft, maxleft, minright, maxright)
             unaryagenda.clear()
     if not chart:
         return chart, 'no parse ' + chart.stats()
     return chart, chart.stats()
 
+cdef _update_filter(CFGChart_fused chart, size_t cellidx, uint32_t lhs,
+                    short left, short right,
+                    short[:, :] minleft, short[:, :] maxleft,
+                    short[:, :] minright, short[:, :] maxright):
+    if left > minleft[lhs, right]:
+        minleft[lhs, right] = left
+    if left < maxleft[lhs, right]:
+        maxleft[lhs, right] = left
+    if right < minright[lhs, left]:
+        minright[lhs, left] = right
+    if right > maxright[lhs, left]:
+        maxright[lhs, left] = right
 
 cdef populatepos(Grammar grammar, CFGChart_fused chart, sent, tags,
                  short[:, :] minleft, short[:, :] maxleft,
