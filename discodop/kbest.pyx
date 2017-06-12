@@ -230,7 +230,8 @@ def getderiv(v, RankedEdge ej, Chart chart, str debin):
     return ''.join(result)
 
 
-def lazykbest(Chart chart, int k, str debin=None, bint derivs=True):
+def lazykbest(Chart chart, int k, str debin=None, bint derivs=True,
+              int max_depth=MAX_DEPTH):
     """Wrapper function to run ``lazykthbest``.
 
     Produces the ranked chart, as well as derivations as strings (when
@@ -247,7 +248,7 @@ def lazykbest(Chart chart, int k, str debin=None, bint derivs=True):
     derivations = []
     cand = {}
     root = chart.root()
-    lazykthbest(root, k, k, cand, chart, explored, MAX_DEPTH)
+    lazykthbest(root, k, k, cand, chart, explored, max_depth)
     chart.rankededges[root] = [entry for entry
                                in chart.rankededges[root][:k]
                                if explorederivation(root, entry.key, chart, explored, MAX_DEPTH)]
