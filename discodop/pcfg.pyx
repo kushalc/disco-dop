@@ -1,3 +1,5 @@
+# cython: profile=True
+
 """CKY parser for Probabilistic Context-Free Grammar (PCFG)."""
 from __future__ import print_function
 from os import unlink
@@ -374,19 +376,18 @@ cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
         return chart, msg
 
     for span in range(1, lensent + 1):
-        for left in range(lensent - span + 1):
-            right = left + span
+        # NOTE: lastidx isn't used for awhile, but it's necessary for
+        # _handle_unary to work since it'll do one pass on all LHSes added
+        # for this (left, span) pair.
+        lastidx = len(chart.itemsinorder)
+        for lhs in xrange(grammar.phrasalnonterminals):
+            for left in range(lensent - span + 1):
+                right = left + span
+                cell = cellidx(left, right, lensent, grammar.nonterminals)
+                prepared_span = grammar.emission._prepare_span(sent[left:right], prepared=prepared_doc) \
+                                if grammar.emission else None
 
-            # NOTE: lastidx isn't used for awhile, but it's necessary for
-            # _handle_unary to work since it'll do one pass on all LHSes added
-            # for this (left, span) pair.
-            lastidx = len(chart.itemsinorder)
-            cell = cellidx(left, right, lensent, grammar.nonterminals)
-            prepared_span = grammar.emission._prepare_span(sent[left:right], prepared=prepared_doc) \
-                            if grammar.emission else None
-
-            beam = beam_beta if span <= beam_delta else 0.0
-            for lhs in xrange(grammar.phrasalnonterminals):
+                beam = beam_beta if span <= beam_delta else 0.0
                 oldscore = chart._subtreeprob(cell + lhs)
                 if grammar._is_mte(lhs):
                     prob = grammar.emission._span_log_proba(lhs, sent[left:right],
@@ -426,9 +427,8 @@ cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
                     _update_filter(chart, lhs, left, right, minleft, maxleft,
                                    minright, maxright)
 
-            _handle_unary(chart, grammar, unaryagenda, cell, lastidx,
-                          left, right, lensent, minleft, maxleft, minright,
-                          maxright)
+        _handle_span_unary(chart, grammar, unaryagenda, lastidx, span, lensent,
+                           minleft, maxleft, minright, maxright)
 
     if not chart:
         return chart, 'no parse ' + chart.stats()
@@ -446,6 +446,20 @@ cdef _update_filter(CFGChart_fused chart, uint32_t lhs,
         minright[lhs, left] = right
     if right > maxright[lhs, left]:
         maxright[lhs, left] = right
+
+cdef _handle_span_unary(CFGChart_fused chart, Grammar grammar, DoubleAgenda unaryagenda,
+                        size_t lastidx, short span, short lensent,
+                        short[:, :] minleft, short[:, :] maxleft,
+                        short[:, :] minright, short[:, :] maxright):
+    cdef:
+        size_t cell
+        short right
+
+    for left in range(lensent - span + 1):
+        right = left + span
+        cell = cellidx(left, right, lensent, grammar.nonterminals)
+        _handle_unary(chart, grammar, unaryagenda, cell, lastidx, left, right, lensent,
+                      minleft, maxleft, minright, maxright)
 
 cdef _handle_unary(CFGChart_fused chart, Grammar grammar, DoubleAgenda unaryagenda,
                    size_t cell, size_t lastidx, short left, short right, short lensent,
