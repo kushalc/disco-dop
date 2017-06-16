@@ -24,7 +24,7 @@ cdef class CFGChart(Chart):
 @cython.final
 cdef class DenseCFGChart(CFGChart):
     cdef EdgesStruct * parseforest  # chartitem => EdgesStruct(...)
-    cdef double * probs
+    cdef float * probs
     cdef void addedge(self, uint32_t lhs, Idx start, Idx end, Idx mid,
                       ProbRule * rule)
     cdef bint updateprob(self, uint32_t lhs, Idx start, Idx end, double prob,

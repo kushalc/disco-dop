@@ -90,10 +90,10 @@ cdef class DenseCFGChart(CFGChart):
         self.viterbi = viterbi
         entries = compactcellidx(self.lensent - 1, self.lensent, self.lensent,
                                  grammar.nonterminals) + grammar.nonterminals
-        self.probs = <double * >malloc(entries * sizeof(double))
+        self.probs = <float * >malloc(entries * sizeof(float))
         if self.probs is NULL:
             raise MemoryError('allocation error')
-        for n in range(entries):
+        for n in xrange(entries):
             self.probs[n] = INFINITY
         # store parse forest in array instead of dict
         # FIXME: use compactcellidx?
@@ -163,11 +163,11 @@ cdef class DenseCFGChart(CFGChart):
             if prob > self.probs[beamitem] + beam:
                 return False
             elif prob < self.probs[beamitem]:
-                self.probs[beamitem] = self.probs[idx] = prob
+                self.probs[beamitem] = self.probs[idx] = <float> prob
             elif prob < self.probs[idx]:
-                self.probs[idx] = prob
+                self.probs[idx] = <float> prob
         elif prob < self.probs[idx]:
-            self.probs[idx] = prob
+            self.probs[idx] = <float> prob
         return True
 
     cdef double _subtreeprob(self, size_t item):

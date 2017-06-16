@@ -32,5 +32,5 @@ DEF MAX_LOGPROB = 300.0
 DEF MAX_DEPTH = 256
 
 # The maximum number of NTs before we switch to a SparseCFGChart.
-DEF MAX_DENSE_NTS = 20000
-DEF MAX_DENSE_LEN = 512
+DEF MAX_DENSE_NTS = 1000
+DEF MAX_DENSE_LEN = 700
