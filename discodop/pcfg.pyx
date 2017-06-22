@@ -374,6 +374,8 @@ cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
         return chart, msg
 
     for span in range(1, lensent + 1):
+        spannable = grammar.emission._spannable(span) if grammar.emission \
+                    else xrange(grammar.phrasalnonterminals)
         for left in range(lensent - span + 1):
             right = left + span
 
@@ -386,7 +388,7 @@ cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
                             if grammar.emission else None
 
             beam = beam_beta if span <= beam_delta else 0.0
-            for lhs in xrange(grammar.phrasalnonterminals):
+            for lhs in spannable:
                 oldscore = chart._subtreeprob(cell + lhs)
                 if grammar._is_mte(lhs):
                     prob = grammar.emission._span_log_proba(lhs, sent[left:right],
