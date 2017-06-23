@@ -7,8 +7,7 @@ from cpython.array cimport array
 cimport cython
 include "constants.pxi"
 
-# NB: For PCFG parsing sentences longer than 256 words, change this to uint16_t
-ctypedef uint8_t Idx
+ctypedef unsigned short Idx
 
 
 cdef extern from *:
@@ -49,6 +48,7 @@ cdef class Grammar:
     cdef _indexrules(self, ProbRule ** dest, int idx, int filterlen)
     cpdef rulestr(self, int n)
     cdef yfstr(self, ProbRule rule)
+    cdef object emission
 
 
 # chart improvements done:
@@ -149,6 +149,7 @@ cdef union Position:  # 8 bytes
 cdef struct Edge:  # 16 bytes
     ProbRule * rule  # ruleno may take less space than pointer, but not convenient
     Position pos
+    short left   # FIXME: Unions, WTF?!
 
 
 @cython.final

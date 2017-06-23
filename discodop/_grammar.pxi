@@ -61,13 +61,14 @@ cdef class Grammar:
         self.fanout = self.unary = self.mapping = self.splitmapping = NULL
 
     def __init__(self, rule_tuples_or_str, lexicon=None, start='ROOT',
-                 binarized=True):
+                 binarized=True, emission=None):
         cdef LexicalRule lexrule
         cdef double[:] weights
         cdef int n
         self.mapping = self.splitmapping = self.bylhs = NULL
         self.start = start
         self.binarized = binarized
+        self.emission = emission
         self.numunary = self.numbinary = self.currentmodel = 0
         self.modelnames = ['default']
         self.logprob = False
@@ -392,6 +393,9 @@ cdef class Grammar:
             assert cur.no < self.numrules
         # sentinel rule
         dest[0][m].lhs = dest[0][m].rhs1 = dest[0][m].rhs2 = self.nonterminals
+
+    def _is_mte(self, lhs):
+        return self.emission and self.emission._is_mte(lhs)
 
     def register(self, name, weights):
         """Register a probabilistic model given a name and a sequence of

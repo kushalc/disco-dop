@@ -6,6 +6,7 @@ from __future__ import print_function
 from operator import itemgetter
 from .plcfrs import DoubleAgenda
 from .containers import ChartItem, RankedEdge, Grammar
+import logging
 
 cimport cython
 from libc.stdint cimport uint32_t
@@ -194,7 +195,13 @@ cdef inline _getderiv(list result, v, RankedEdge ej, Chart chart, str debin):
         result.append(chart.grammar.tolabel[label])
         result.append(' ')
     if ej.edge.rule is NULL:  # lexical rule, left child is terminal
-        result.append(str(chart.lexidx(ej.edge)))
+        # left = v / chart.grammar.nonterminals / chart.lensent
+        # right = v / chart.grammar.nonterminals - left * chart.lensent + 1
+        # assert right == chart.lexidx(ej.edge) + 1, (v, left, right, chart.lexidx(ej.edge))
+        for ix in xrange(ej.edge.left, ej.edge.pos.mid):
+            if ix > ej.edge.left:
+                result.append(" ")
+            result.append(str(ix))
     else:
         item = chart.left(ej)
         rankededge = ( < DoubleEntry > chart.rankededges[item][ej.left]).key

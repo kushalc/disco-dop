@@ -16,7 +16,7 @@ discodop:
 	cp build/lib.*/discodop/*.so discodop/
 
 py2:
-	python2 setup.py build
+	python2 setup.py build build_py build_ext
 	sudo python2 setup.py install
 	cp build/lib.*/discodop/*.so discodop/
 
