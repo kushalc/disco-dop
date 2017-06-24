@@ -331,6 +331,7 @@ def parse(sent, Grammar grammar, tags=None, start=None, beamer=None):
     :param start: integer corresponding to the start symbol that complete
             derivations should be headed by; e.g., ``grammar.toid['ROOT']``.
             If not given, the default specified by ``grammar`` is used.
+    :param beamer: A callable that returns beam threshold for a given span.
 
     :returns: a ``Chart`` object.
     """
