@@ -321,22 +321,19 @@ cdef class SparseCFGChart(CFGChart):
         self.probs[item] = prob
 
 
-def parse(sent, Grammar grammar, tags=None, start=None,
-          double beam_beta=0.0, int beam_delta=50):
+def parse(sent, Grammar grammar, tags=None, start=None, beamer=None):
     """A CKY parser modeled after Bodenstab's 'fast grammar loop'.
 
     :param sent: A sequence of tokens that will be parsed.
     :param grammar: A ``Grammar`` object.
-    :returns: a ``Chart`` object.
     :param tags: Optionally, a sequence of POS tags to use instead of
             attempting to apply all possible POS tags.
     :param start: integer corresponding to the start symbol that complete
             derivations should be headed by; e.g., ``grammar.toid['ROOT']``.
             If not given, the default specified by ``grammar`` is used.
-    :param beam_beta: keep track of the best score in each cell and only allow
-            items which are within a multiple of ``beam_beta`` of the best score.
-            Should be a negative log probability. Pass ``0.0`` to disable.
-    :param beam_delta: the maximum span length to which beam search is applied.
+    :param beamer: A callable that returns beam threshold for a given span.
+
+    :returns: a ``Chart`` object.
     """
     if grammar.maxfanout != 1:
         raise ValueError('Not a PCFG! fanout: %d' % grammar.maxfanout)
@@ -346,15 +343,12 @@ def parse(sent, Grammar grammar, tags=None, start=None,
     if grammar.nonterminals < MAX_DENSE_NTS and \
        len(sent) < MAX_DENSE_LEN:
         chart = DenseCFGChart(grammar, sent, start)
-        return _parse_clean(sent, < DenseCFGChart > chart, grammar,
-                            tags, beam_beta, beam_delta)
+        return _parse_clean(sent, < DenseCFGChart > chart, grammar, tags, beamer)
     else:
         chart = SparseCFGChart(grammar, sent, start)
-        return _parse_clean(sent, < SparseCFGChart > chart, grammar,
-                            tags, beam_beta, beam_delta)
+        return _parse_clean(sent, < SparseCFGChart > chart, grammar, tags, beamer)
 
-cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
-                  tags, double beam_beta, int beam_delta):
+cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar, tags=None, beamer=None):
     cdef:
         DoubleAgenda unaryagenda = DoubleAgenda()
         short[:, :] minleft, maxleft, minright, maxright
@@ -374,6 +368,10 @@ cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
         return chart, msg
 
     for span in range(1, lensent + 1):
+        spannable = grammar.emission._spannable(span, prepared=prepared_doc) if grammar.emission \
+                    else xrange(grammar.phrasalnonterminals)
+        beam = beamer(span) if beamer else 0.000
+
         for left in range(lensent - span + 1):
             right = left + span
 
@@ -385,8 +383,7 @@ cdef _parse_clean(sent, CFGChart_fused chart, Grammar grammar,
             prepared_span = grammar.emission._prepare_span(sent[left:right], prepared=prepared_doc) \
                             if grammar.emission else None
 
-            beam = beam_beta if span <= beam_delta else 0.0
-            for lhs in xrange(grammar.phrasalnonterminals):
+            for lhs in spannable:
                 oldscore = chart._subtreeprob(cell + lhs)
                 if grammar._is_mte(lhs):
                     prob = grammar.emission._span_log_proba(lhs, sent[left:right],
