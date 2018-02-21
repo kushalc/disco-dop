@@ -81,7 +81,7 @@ else:
 directives = {
 		'profile': False,
 		'cdivision': True,
-		'fast_fail': True,
+		# 'fast_fail': False,  # This seems to fail on High Sierra for some reason.
 		'nonecheck': False,
 		'wraparound': False,
 		'boundscheck': False,
