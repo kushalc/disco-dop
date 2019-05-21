@@ -25,4 +25,12 @@ DEF MAX_LOGPROB = 300.0
 
 # The maximum length of the path to the root node and any terminal node.
 # Prevents unary cycles from causing stack overflows in k-best extraction.
-DEF MAX_DEPTH = 200
+#
+# NOTE: This is effectively a limit on how many tokens a resume can have, in
+# particular assuming a complete binary tree (not true, since parse trees are
+# unbalanced), 2^10 = 1K, 2^20 = 1000K, etc.
+DEF MAX_DEPTH = 256
+
+# The maximum number of NTs before we switch to a SparseCFGChart.
+DEF MAX_DENSE_NTS = 2048
+DEF MAX_DENSE_LEN = 2048
